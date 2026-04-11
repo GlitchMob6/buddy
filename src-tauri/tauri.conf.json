@@ -12,11 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "buddy",
-        "width": 800,
-        "height": 600,
-        "resizable": true,
-        "fullscreen": false
+        "title": "Prototype",
+        "decorations": false,
+        "transparent": false,
+        "width": 1200,
+        "height": 800
       }
     ],
     "security": {

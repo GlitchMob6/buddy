@@ -1,16 +1,19 @@
 <script>
-  import { activeWorkspace, activePage } from '../store.js';
-  import { PlayCircle, Clock } from 'lucide-svelte';
-  import { onMount } from 'svelte';
+  import { activeWorkspace, activePage } from "../store.js";
+  import { PlayCircle, Clock } from "lucide-svelte";
+  import { onMount } from "svelte";
 
-  const workspaces = ['code', 'browser', 'pdf', 'notes'];
-  
-  let currentTime = '';
+  const workspaces = ["1", "2", "3"];
+
+  let currentTime = "";
 
   onMount(() => {
     const updateTime = () => {
       const now = new Date();
-      currentTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      currentTime = now.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
     };
     updateTime();
     const interval = setInterval(updateTime, 60000);
@@ -19,7 +22,7 @@
 
   function setWorkspace(ws) {
     activeWorkspace.set(ws);
-    activePage.set('workspace');
+    activePage.set("workspace");
   }
 </script>
 
@@ -28,8 +31,10 @@
     <div class="wordmark">BUDDY</div>
     <div class="pills">
       {#each workspaces as ws}
-        <button 
-          class="pill { $activeWorkspace === ws && $activePage === 'workspace' ? 'active' : '' }"
+        <button
+          class="pill {$activeWorkspace === ws && $activePage === 'workspace'
+            ? 'active'
+            : ''}"
           on:click={() => setWorkspace(ws)}
         >
           {ws}
@@ -126,7 +131,7 @@
   }
 
   .clock {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: "JetBrains Mono", monospace;
     color: var(--text-primary);
     font-size: 14px;
     font-weight: 500;
@@ -142,7 +147,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: "JetBrains Mono", monospace;
     color: var(--accent);
     font-size: 13px;
     background: rgba(124, 106, 247, 0.1);
@@ -162,9 +167,15 @@
   }
 
   @keyframes flash {
-    0% { opacity: 0.4; }
-    50% { opacity: 1; }
-    100% { opacity: 0.4; }
+    0% {
+      opacity: 0.4;
+    }
+    50% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0.4;
+    }
   }
 
   .music-player {
@@ -180,6 +191,7 @@
     cursor: pointer;
     font-family: inherit;
     transition: all 0.2s;
+    color: rgb(80, 222, 80);
   }
 
   .music-player:hover {
