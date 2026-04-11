@@ -2,8 +2,7 @@
   import { activePage } from './lib/store.js';
   import Sidebar from './lib/components/Sidebar.svelte';
   import TopBar from './lib/components/TopBar.svelte';
-  
-  // Import Routes
+
   import Dashboard from './routes/Dashboard.svelte';
   import Tasks from './routes/Tasks.svelte';
   import Sessions from './routes/Sessions.svelte';
@@ -25,50 +24,36 @@
   };
 </script>
 
-<div class="app-layout">
+<div class="app-shell">
   <Sidebar />
-  <main class="main-column">
+  <div class="main-col">
     <TopBar />
-    <div class="content-area">
+    <div class="view">
       <svelte:component this={routes[$activePage]} />
     </div>
-  </main>
+  </div>
 </div>
 
 <style>
-  :global(*) {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-  }
-  
-  :global(html, body) {
-    background: var(--bg-base);
-    color: var(--text-primary);
-    font-family: "Space Grotesk", sans-serif;
-    height: 100%;
-    overflow: hidden;
-  }
-
-  .app-layout {
+  .app-shell {
     display: flex;
     height: 100vh;
     width: 100vw;
     background: var(--bg-base);
-  }
-
-  .main-column {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    height: 100%;
     overflow: hidden;
   }
 
-  .content-area {
+  .main-col {
+    display: flex;
+    flex-direction: column;
     flex: 1;
-    overflow: auto;
-    position: relative;
+    min-width: 0;
+  }
+
+  .view {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
     background: var(--bg-base);
   }
 </style>

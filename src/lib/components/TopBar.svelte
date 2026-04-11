@@ -1,23 +1,21 @@
 <script>
   import { activeWorkspace, activePage } from "../store.js";
-  import { PlayCircle, Clock } from "lucide-svelte";
+  import { Play, Disc3 } from "lucide-svelte";
   import { onMount } from "svelte";
 
   const workspaces = ["1", "2", "3"];
-
   let currentTime = "";
+  let currentDate = "";
 
   onMount(() => {
-    const updateTime = () => {
+    const tick = () => {
       const now = new Date();
-      currentTime = now.toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-      });
+      currentTime = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      currentDate = now.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
     };
-    updateTime();
-    const interval = setInterval(updateTime, 60000);
-    return () => clearInterval(interval);
+    tick();
+    const iv = setInterval(tick, 30000);
+    return () => clearInterval(iv);
   });
 
   function setWorkspace(ws) {
@@ -26,176 +24,167 @@
   }
 </script>
 
-<header class="topbar">
-  <div class="left-section">
-    <div class="wordmark">BUDDY</div>
-    <div class="pills">
+<header class="bar">
+  <div class="bar-left">
+    <span class="wordmark">buddy</span>
+    <div class="ws-group">
       {#each workspaces as ws}
         <button
-          class="pill {$activeWorkspace === ws && $activePage === 'workspace'
-            ? 'active'
-            : ''}"
+          class="ws-pill"
+          class:active={$activeWorkspace === ws && $activePage === "workspace"}
           on:click={() => setWorkspace(ws)}
-        >
-          {ws}
-        </button>
+        >{ws}</button>
       {/each}
-      <button class="pill add-pill">+</button>
+      <button class="ws-pill ws-add">+</button>
     </div>
   </div>
 
-  <div class="center-section">
-    <div class="clock">{currentTime}</div>
+  <div class="bar-center">
+    <span class="time">{currentTime}</span>
+    <span class="date">{currentDate}</span>
   </div>
 
-  <div class="right-section">
-    <div class="session-timer">
-      <span class="dot pulse"></span>
-      <span class="timer-text">00:00:00</span>
+  <div class="bar-right">
+    <div class="timer-chip">
+      <span class="timer-dot" />
+      <span class="timer-val">00:00</span>
     </div>
-    <button class="music-player">
-      <PlayCircle size={18} />
-      <span>Music</span>
+    <button class="control-chip">
+      <Disc3 size={14} strokeWidth={1.5} />
     </button>
   </div>
 </header>
 
 <style>
-  .topbar {
-    width: 100%;
-    height: 54px;
+  .bar {
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
     background: var(--bg-surface);
     border-bottom: 1px solid var(--border);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 0 16px;
-    z-index: 5;
+    flex-shrink: 0;
+    position: relative;
   }
 
-  .left-section {
+  .bar-left {
     display: flex;
     align-items: center;
-    gap: 24px;
+    gap: 20px;
   }
 
   .wordmark {
-    color: var(--accent);
-    font-weight: 800;
-    font-size: 16px;
-    letter-spacing: 1px;
-    text-transform: uppercase;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    letter-spacing: 0.3px;
   }
 
-  .pills {
+  .ws-group {
     display: flex;
-    gap: 8px;
-    background: var(--bg-base);
-    padding: 4px;
-    border-radius: 8px;
-    border: 1px solid var(--border);
+    gap: 2px;
   }
 
-  .pill {
+  .ws-pill {
+    padding: 4px 10px;
+    font-size: 12px;
+    font-family: var(--font-mono);
+    color: var(--text-tertiary);
     background: transparent;
     border: 1px solid transparent;
-    color: var(--text-secondary);
-    font-size: 13px;
-    padding: 4px 12px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    transition: all 0.2s;
-    font-family: inherit;
-    text-transform: lowercase;
+    transition: all 0.15s ease;
   }
 
-  .pill:hover {
-    color: var(--text-primary);
+  .ws-pill:hover {
+    color: var(--text-secondary);
+    background: rgba(255, 255, 255, 0.03);
   }
 
-  .pill.active {
-    background: var(--accent-dim);
+  .ws-pill.active {
     color: var(--accent);
-    border-color: var(--border-active);
+    background: var(--accent-dim);
+    border-color: rgba(139, 92, 246, 0.12);
   }
 
-  .add-pill {
-    font-size: 16px;
-    padding: 4px 8px;
+  .ws-add {
+    color: var(--text-tertiary);
   }
 
-  .center-section {
+  .bar-center {
     position: absolute;
     left: 50%;
     transform: translateX(-50%);
-  }
-
-  .clock {
-    font-family: "JetBrains Mono", monospace;
-    color: var(--text-primary);
-    font-size: 14px;
-    font-weight: 500;
-  }
-
-  .right-section {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 16px;
+    line-height: 1.2;
   }
 
-  .session-timer {
+  .time {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    letter-spacing: 0.5px;
+  }
+
+  .date {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    letter-spacing: 0.3px;
+  }
+
+  .bar-right {
     display: flex;
     align-items: center;
     gap: 8px;
-    font-family: "JetBrains Mono", monospace;
-    color: var(--accent);
-    font-size: 13px;
-    background: rgba(124, 106, 247, 0.1);
-    padding: 4px 12px;
-    border-radius: 12px;
   }
 
-  .dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--accent);
-  }
-
-  .pulse {
-    animation: flash 1.5s infinite;
-  }
-
-  @keyframes flash {
-    0% {
-      opacity: 0.4;
-    }
-    50% {
-      opacity: 1;
-    }
-    100% {
-      opacity: 0.4;
-    }
-  }
-
-  .music-player {
+  .timer-chip {
     display: flex;
     align-items: center;
     gap: 6px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    color: var(--text-secondary);
-    padding: 6px 12px;
-    border-radius: 16px;
-    font-size: 13px;
-    cursor: pointer;
-    font-family: inherit;
-    transition: all 0.2s;
-    color: rgb(80, 222, 80);
+    padding: 4px 10px;
+    border-radius: 20px;
+    background: var(--accent-dim);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--accent);
   }
 
-  .music-player:hover {
-    color: var(--text-primary);
-    border-color: var(--border);
+  .timer-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: breathe 2s ease-in-out infinite;
+  }
+
+  @keyframes breathe {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 1; }
+  }
+
+  .control-chip {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .control-chip:hover {
+    color: var(--text-secondary);
+    border-color: var(--border-active);
+    background: rgba(255, 255, 255, 0.02);
   }
 </style>

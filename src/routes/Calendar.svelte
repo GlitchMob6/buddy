@@ -1,1 +1,8 @@
-<div class="page-container"><h2>Calendar</h2><p>This is a stub for Calendar.</p></div><style>.page-container { padding: 40px; } h2 { color: var(--text-primary); font-family: 'Space Grotesk', sans-serif; }</style>
+<div class="page">
+  <h1>Calendar</h1>
+</div>
+
+<style>
+  .page { padding: 28px 32px; }
+  h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.3px; }
+</style>
