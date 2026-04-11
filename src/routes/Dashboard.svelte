@@ -1,0 +1,1 @@
+<div class="page-container"><h2>Dashboard</h2><p>This is a stub for Dashboard.</p></div><style>.page-container { padding: 40px; } h2 { color: var(--text-primary); font-family: 'Space Grotesk', sans-serif; }</style>

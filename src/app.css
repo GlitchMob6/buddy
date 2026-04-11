@@ -1,0 +1,23 @@
+:root {
+  --bg-base: #0a0a0c;
+  --bg-surface: #0f0f12;
+  --bg-elevated: #141418;
+  --border: #1c1c22;
+  --border-active: #2e2e3a;
+  --accent: #6d5dfc;
+  --accent-dim: #16132e;
+  --text-primary: #f0eeff;
+  --text-secondary: #6e6d8a;
+  --text-tertiary: #2e2d3a;
+  --green: #34c47c;
+  --amber: #e09b2d;
+  --red: #e84545;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  height: 100%;
+  font-family: 'Space Grotesk', sans-serif;
+}
