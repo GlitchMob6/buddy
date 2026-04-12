@@ -1,29 +1,32 @@
 from datetime import datetime
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text
-from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy.orm import declarative_base, relationship, backref
 
 Base = declarative_base()
 
 class Task(Base):
     __tablename__ = 'tasks'
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
+    parent_id = Column(Integer, ForeignKey('tasks.id'), nullable=True)
+    node_type = Column(String, nullable=False, default='task')  # 'group' or 'task'
     title = Column(String, nullable=False)
     description = Column(Text, nullable=True)
-    task_type = Column(String) # exam/assignment/project
-    priority = Column(String) # low/med/high
+    task_type = Column(String, nullable=True)
+    priority = Column(String, default='med')  # low/med/high
     due_date = Column(DateTime, nullable=True)
-    estimated_mins = Column(Integer) # AI estimated
-    status = Column(String, default="pending") # pending/done/carried
-    penalty_level = Column(Integer, default=0) # 0-3
+    estimated_mins = Column(Integer, default=60)
+    status = Column(String, default='pending')  # pending/done/carried
+    penalty_level = Column(Integer, default=0)  # 0-3
     workspace_id = Column(Integer, ForeignKey('workspaces.id'), nullable=True)
-    source = Column(String, default="manual") # manual/android
+    source = Column(String, default='manual')  # manual/android
     supabase_id = Column(String, nullable=True, unique=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    session_tasks = relationship("SessionTask", back_populates="task")
-    penalties = relationship("Penalty", back_populates="task")
-    workspace = relationship("Workspace", back_populates="tasks")
+    children = relationship('Task', backref=backref('parent', remote_side=[id]), lazy='dynamic')
+    penalties = relationship('Penalty', back_populates='task')
+    session_tasks = relationship('SessionTask', back_populates='task')
+    workspace = relationship('Workspace', back_populates='tasks')
 
 
 class Session(Base):

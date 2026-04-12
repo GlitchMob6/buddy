@@ -45,3 +45,5 @@ __pycache__/
 # 🧪 Temporary files
 *.tmp
 *.temp
+
+implementation_plan.md
