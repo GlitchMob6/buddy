@@ -1,431 +1,421 @@
 <script>
-    import { onMount, tick, afterUpdate } from 'svelte';
-    import { FolderOpen, Pin, Plus, X, GripVertical, Trash2 } from 'lucide-svelte';
-    import { taskColumns, activeNodePerColumn, pinnedCards, taskLoading } from '../lib/store.js';
+    import { onMount, tick } from 'svelte';
+    import { Plus, X, Trash2, Zap } from 'lucide-svelte';
 
     const API_BASE = 'http://localhost:8000';
 
-    // Local reactive mirrors of stores
-    let columns = [];
-    let activeNodes = {};
-    let pinned = [];
-    let loading = false;
+    // ── STATE ──────────────────────────────────────────────────
+    let nodes = [];
+    let selectedId = null;
+    let panX = 0, panY = 0;
+    let zoom = 1;
+    let isPanning = false;
+    let panStart = { x: 0, y: 0 };
+    let contextMenu = { visible: false, x: 0, y: 0, nodeId: null };
+    let sidePanel = { open: false, node: null };
+    let pinnedIds = new Set();
 
-    // Canvas
-    let canvasEl;
-    let columnsContainerEl;
-
-    // Modals
+    // New roadmap modal
     let showNewModal = false;
-    let showDetailModal = false;
-    let detailNode = null;
-
-    // New node form
-    let formType = 'Task';
     let formTitle = '';
-    let formPriority = 'med';
-    let formDueDate = '';
-    let formEstimatedMinutes = '';
-    let formPenaltyLevel = 0;
     let formDescription = '';
+    let formDueDate = '';
+    let formDirection = 'tb';
 
-    // Detail edit form
+    // Side panel edit form
     let editTitle = '';
     let editDescription = '';
-    let editPriority = 'med';
     let editDueDate = '';
-    let editEstimatedMinutes = '';
-    let editPenaltyLevel = 0;
 
     // Drag state
-    let dragState = null; // { colIndex, nodeIndex, node, startY, currentY }
-
-    // SVG arrows
-    let arrowPaths = [];
+    let dragNode = null;
+    let dragStart = { x: 0, y: 0 };
+    let dragNodeStart = { x: 0, y: 0 };
 
     // Hover state
-    let hoveredCardId = null;
+    let hoveredNodeId = null;
 
-    // Store subscriptions
-    const unsubs = [];
-    onMount(() => {
-        unsubs.push(taskColumns.subscribe(v => { columns = v; }));
-        unsubs.push(activeNodePerColumn.subscribe(v => { activeNodes = v; }));
-        unsubs.push(pinnedCards.subscribe(v => { pinned = v; }));
-        unsubs.push(taskLoading.subscribe(v => { loading = v; }));
-        fetchRootNodes();
-        return () => unsubs.forEach(u => u());
-    });
+    // Canvas dimensions
+    let svgEl;
+    let containerEl;
+    let canvasWidth = 0;
+    let canvasHeight = 0;
 
-    afterUpdate(() => {
-        recalcArrows();
-    });
+    // Node card constants
+    const CARD_W = 200;
+    const CARD_MIN_H = 80;
+    const CHILD_ROW_H = 28;
+    const HEADER_H = 42;
 
-    // ── API ──────────────────────────────────────────────────────
-    async function fetchNodes(parentId) {
-        const url = parentId != null
-            ? `${API_BASE}/tasks?parent_id=${parentId}`
-            : `${API_BASE}/tasks?parent_id=null`;
-        const r = await fetch(url);
-        if (!r.ok) throw new Error('Failed to fetch');
-        const data = await r.json();
-        return Array.isArray(data) ? data : (data.tasks || []);
+    // ── DERIVED ────────────────────────────────────────────────
+    $: rootNodes = nodes.filter(n => n.parent_id === null);
+    $: childrenOf = (parentId) => nodes.filter(n => n.parent_id === parentId);
+    $: getNode = (id) => nodes.find(n => n.id === id);
+
+    function cardHeight(node) {
+        const kids = childrenOf(node.id);
+        if (kids.length === 0) return CARD_MIN_H;
+        return HEADER_H + kids.length * CHILD_ROW_H + 8;
     }
 
-    async function fetchRootNodes() {
-        taskLoading.set(true);
-        try {
-            const roots = await fetchNodes(null);
-            taskColumns.set([roots]);
-            activeNodePerColumn.set({});
-        } catch (e) {
-            console.error('Failed to fetch root nodes:', e);
-            taskColumns.set([[]]);
-        } finally {
-            taskLoading.set(false);
+    function nodeDirection(node) {
+        // Walk up tree to find root's direction
+        let current = node;
+        while (current && current.parent_id !== null) {
+            current = getNode(current.parent_id);
         }
+        return current?.task_type || 'tb';
     }
 
-    async function handleGroupClick(colIndex, node) {
-        // Set this node as active for this column
-        const newActive = { ...activeNodes };
-        newActive[colIndex] = node.id;
-
-        // Remove all columns to the right (except pinned cards remain)
-        const newColumns = columns.slice(0, colIndex + 1);
-
-        // Remove active nodes for removed columns
-        Object.keys(newActive).forEach(k => {
-            if (parseInt(k) > colIndex) delete newActive[k];
+    // ── LIFECYCLE ──────────────────────────────────────────────
+    onMount(() => {
+        fetchAllNodes();
+        const ro = new ResizeObserver(() => {
+            if (svgEl) {
+                canvasWidth = svgEl.clientWidth;
+                canvasHeight = svgEl.clientHeight;
+            }
+        });
+        // Defer observation to next tick so svgEl is bound
+        requestAnimationFrame(() => {
+            if (svgEl) {
+                ro.observe(svgEl);
+                canvasWidth = svgEl.clientWidth;
+                canvasHeight = svgEl.clientHeight;
+            }
         });
 
-        activeNodePerColumn.set(newActive);
-        taskColumns.set(newColumns);
-
-        // Fetch children
-        taskLoading.set(true);
-        try {
-            const children = await fetchNodes(node.id);
-            taskColumns.update(cols => [...cols, children]);
-            await tick();
-            scrollToNewColumn();
-        } catch (e) {
-            console.error('Failed to fetch children:', e);
-        } finally {
-            taskLoading.set(false);
-        }
-    }
-
-    function scrollToNewColumn() {
-        if (!canvasEl) return;
-        const pinnedColWidth = pinned.length > 0 ? 236 : 0; // 200 + 20 + 16
-        const totalColumnsWidth = columns.length * 280; // 220 + 60
-        const targetScroll = pinnedColWidth + totalColumnsWidth - canvasEl.clientWidth + 100;
-        canvasEl.scrollTo({ left: Math.max(0, targetScroll), behavior: 'smooth' });
-    }
-
-    async function toggleTask(e, node) {
-        e.stopPropagation();
-        const newStatus = node.status === 'done' ? 'pending' : 'done';
-
-        // Optimistic update across all columns
-        taskColumns.update(cols => cols.map(col =>
-            col.map(n => n.id === node.id ? { ...n, status: newStatus } : n)
-        ));
-        // Also update pinned
-        pinnedCards.update(pins =>
-            pins.map(n => n.id === node.id ? { ...n, status: newStatus } : n)
-        );
-
-        try {
-            const r = await fetch(`${API_BASE}/tasks/${node.id}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ status: newStatus })
-            });
-            if (!r.ok) throw new Error('Update failed');
-        } catch (e) {
-            console.error(e);
-            // Revert on failure
-            taskColumns.update(cols => cols.map(col =>
-                col.map(n => n.id === node.id ? { ...n, status: node.status } : n)
-            ));
-            pinnedCards.update(pins =>
-                pins.map(n => n.id === node.id ? { ...n, status: node.status } : n)
-            );
-        }
-    }
-
-    // ── Pin logic ────────────────────────────────────────────────
-    function togglePin(e, node) {
-        e.stopPropagation();
-        const isPinned = pinned.some(p => p.id === node.id);
-        if (isPinned) {
-            pinnedCards.update(pins => pins.filter(p => p.id !== node.id));
-        } else {
-            pinnedCards.update(pins => [...pins, { ...node }]);
-        }
-    }
-
-    function isNodePinned(nodeId) {
-        return pinned.some(p => p.id === nodeId);
-    }
-
-    // ── Detail modal ─────────────────────────────────────────────
-    function openDetail(e, node) {
-        e.stopPropagation();
-        detailNode = node;
-        editTitle = node.title || '';
-        editDescription = node.description || '';
-        editPriority = node.priority || 'med';
-        editDueDate = node.due_date ? node.due_date.slice(0, 16) : '';
-        editEstimatedMinutes = node.estimated_mins || '';
-        editPenaltyLevel = node.penalty_level || 0;
-        showDetailModal = true;
-    }
-
-    async function saveDetail() {
-        if (!detailNode) return;
-        const updates = {
-            title: editTitle,
-            description: editDescription,
-            priority: editPriority,
-            estimated_mins: parseInt(editEstimatedMinutes) || 60,
-            penalty_level: parseInt(editPenaltyLevel) || 0
-        };
-        if (editDueDate) {
-            updates.due_date = editDueDate;
-        }
-        try {
-            const r = await fetch(`${API_BASE}/tasks/${detailNode.id}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(updates)
-            });
-            if (r.ok) {
-                // Refresh the column this node belongs to
-                const parentId = detailNode.parent_id;
-                const colIndex = findColumnOfNode(detailNode.id);
-                if (colIndex >= 0) {
-                    const refreshed = await fetchNodes(parentId);
-                    taskColumns.update(cols => {
-                        const newCols = [...cols];
-                        newCols[colIndex] = refreshed;
-                        return newCols;
-                    });
-                }
-                // Update pinned copy
-                pinnedCards.update(pins =>
-                    pins.map(p => p.id === detailNode.id ? { ...p, ...updates, title: editTitle } : p)
-                );
-                showDetailModal = false;
+        function handleClickOutside(e) {
+            if (contextMenu.visible) {
+                contextMenu = { ...contextMenu, visible: false };
             }
-        } catch (e) {
-            console.error('Save failed:', e);
         }
-    }
+        window.addEventListener('click', handleClickOutside);
 
-    async function deleteNode() {
-        if (!detailNode) return;
-        try {
-            const r = await fetch(`${API_BASE}/tasks/${detailNode.id}`, { method: 'DELETE' });
-            if (r.ok) {
-                const colIndex = findColumnOfNode(detailNode.id);
-                if (colIndex >= 0) {
-                    const parentId = detailNode.parent_id;
-                    const refreshed = await fetchNodes(parentId);
-                    taskColumns.update(cols => {
-                        const newCols = [...cols];
-                        newCols[colIndex] = refreshed;
-                        // Remove child columns if this was an active node
-                        if (activeNodes[colIndex] === detailNode.id) {
-                            return newCols.slice(0, colIndex + 1);
-                        }
-                        return newCols;
-                    });
-                }
-                pinnedCards.update(pins => pins.filter(p => p.id !== detailNode.id));
-                showDetailModal = false;
-            }
-        } catch (e) {
-            console.error('Delete failed:', e);
-        }
-    }
-
-    function findColumnOfNode(nodeId) {
-        for (let i = 0; i < columns.length; i++) {
-            if (columns[i].some(n => n.id === nodeId)) return i;
-        }
-        return -1;
-    }
-
-    // ── New node ─────────────────────────────────────────────────
-    function getCurrentParentId() {
-        // The active branch's deepest active node, or null for root
-        const maxActiveCol = Math.max(...Object.keys(activeNodes).map(Number), -1);
-        if (maxActiveCol >= 0) return activeNodes[maxActiveCol];
-        return null;
-    }
-
-    async function submitNode(e) {
-        e.preventDefault();
-        if (!formTitle.trim()) return;
-
-        const parentId = getCurrentParentId();
-        const payload = {
-            title: formTitle,
-            parent_id: parentId,
-            node_type: formType === 'Group' ? 'group' : 'task'
+        return () => {
+            ro.disconnect();
+            window.removeEventListener('click', handleClickOutside);
         };
+    });
 
-        if (formDueDate) payload.due_date = formDueDate;
-        if (formDescription) payload.description = formDescription;
-
-        if (formType === 'Task') {
-            payload.priority = formPriority;
-            if (formEstimatedMinutes) payload.estimated_mins = parseInt(formEstimatedMinutes);
-            payload.penalty_level = parseInt(formPenaltyLevel);
+    // ── API ────────────────────────────────────────────────────
+    async function fetchAllNodes() {
+        try {
+            const r = await fetch(`${API_BASE}/tasks/all`);
+            if (!r.ok) throw new Error('fetch failed');
+            nodes = await r.json();
+        } catch (e) {
+            console.error('Failed to fetch nodes:', e);
+            nodes = [];
         }
+    }
 
+    async function createNode(payload) {
         try {
             const r = await fetch(`${API_BASE}/tasks`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
-
-            if (r.ok) {
-                showNewModal = false;
-                resetForm();
-                // Refresh the correct column
-                const refreshed = await fetchNodes(parentId);
-                taskColumns.update(cols => {
-                    const newCols = [...cols];
-                    // Find which column corresponds to parentId
-                    if (parentId == null) {
-                        newCols[0] = refreshed;
-                    } else {
-                        // It's the column after the one containing the parent
-                        const parentColIndex = findColumnOfNode(parentId);
-                        if (parentColIndex >= 0 && parentColIndex + 1 < newCols.length) {
-                            newCols[parentColIndex + 1] = refreshed;
-                        }
-                    }
-                    return newCols;
-                });
-            }
+            if (!r.ok) throw new Error('create failed');
+            const created = await r.json();
+            nodes = [...nodes, created];
+            return created;
         } catch (e) {
-            console.error(e);
+            console.error('Create failed:', e);
+            return null;
         }
     }
 
-    function resetForm() {
-        formTitle = '';
-        formDueDate = '';
-        formEstimatedMinutes = '';
-        formPenaltyLevel = 0;
-        formDescription = '';
-        formPriority = 'med';
+    async function patchNode(id, updates) {
+        try {
+            const r = await fetch(`${API_BASE}/tasks/${id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(updates)
+            });
+            if (!r.ok) throw new Error('patch failed');
+            nodes = nodes.map(n => n.id === id ? { ...n, ...updates } : n);
+        } catch (e) {
+            console.error('Patch failed:', e);
+        }
     }
 
-    // ── Drag reorder ─────────────────────────────────────────────
-    function startDrag(e, colIndex, nodeIndex, node) {
+    async function deleteNode(id) {
+        try {
+            const r = await fetch(`${API_BASE}/tasks/${id}`, { method: 'DELETE' });
+            if (!r.ok) throw new Error('delete failed');
+            // Remove node and all descendants
+            const toRemove = new Set();
+            function collectDescendants(parentId) {
+                toRemove.add(parentId);
+                nodes.filter(n => n.parent_id === parentId).forEach(c => collectDescendants(c.id));
+            }
+            collectDescendants(id);
+            nodes = nodes.filter(n => !toRemove.has(n.id));
+            pinnedIds.delete(id);
+            pinnedIds = new Set(pinnedIds);
+        } catch (e) {
+            console.error('Delete failed:', e);
+        }
+    }
+
+    // ── ZOOM & PAN ─────────────────────────────────────────────
+    function handleWheel(e) {
+        e.preventDefault();
+        if (e.ctrlKey || e.metaKey) {
+            // Pinch zoom (trackpad) or ctrl+scroll
+            const delta = -e.deltaY * 0.005;
+            const newZoom = Math.max(0.3, Math.min(2, zoom + delta));
+            // Zoom toward cursor
+            const rect = containerEl.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+            const scale = newZoom / zoom;
+            panX = mx - scale * (mx - panX);
+            panY = my - scale * (my - panY);
+            zoom = newZoom;
+        } else {
+            // Regular scroll = pan
+            panX -= e.deltaX;
+            panY -= e.deltaY;
+        }
+    }
+
+    function handleCanvasMouseDown(e) {
+        if (e.button !== 0) return;
+        // Only start panning if clicking on empty canvas (SVG itself or the background rect)
+        if (e.target === svgEl || e.target.classList.contains('canvas-bg')) {
+            isPanning = true;
+            panStart = { x: e.clientX - panX, y: e.clientY - panY };
+            selectedId = null;
+        }
+    }
+
+    function handleCanvasMouseMove(e) {
+        if (isPanning) {
+            panX = e.clientX - panStart.x;
+            panY = e.clientY - panStart.y;
+        }
+        if (dragNode) {
+            const dx = (e.clientX - dragStart.x) / zoom;
+            const dy = (e.clientY - dragStart.y) / zoom;
+            const newX = dragNodeStart.x + dx;
+            const newY = dragNodeStart.y + dy;
+            nodes = nodes.map(n => n.id === dragNode.id ? { ...n, pos_x: newX, pos_y: newY } : n);
+        }
+    }
+
+    function handleCanvasMouseUp(e) {
+        if (isPanning) {
+            isPanning = false;
+        }
+        if (dragNode) {
+            const node = nodes.find(n => n.id === dragNode.id);
+            if (node) {
+                patchNode(node.id, { pos_x: node.pos_x, pos_y: node.pos_y });
+            }
+            dragNode = null;
+        }
+    }
+
+    // ── NODE DRAG ──────────────────────────────────────────────
+    function handleNodeMouseDown(e, node) {
+        if (e.button !== 0) return;
         e.stopPropagation();
-        const startY = e.clientY || e.touches?.[0]?.clientY || 0;
-        dragState = { colIndex, nodeIndex, node, startY, currentY: startY, offsetY: 0 };
-
-        const onMove = (ev) => {
-            const y = ev.clientY || ev.touches?.[0]?.clientY || 0;
-            dragState = { ...dragState, currentY: y, offsetY: y - dragState.startY };
-        };
-        const onUp = async () => {
-            window.removeEventListener('mousemove', onMove);
-            window.removeEventListener('mouseup', onUp);
-
-            if (!dragState) return;
-            const { colIndex: ci, nodeIndex: ni, offsetY } = dragState;
-            const cardHeight = 132; // 120 + 12 gap
-            const moveBy = Math.round(offsetY / cardHeight);
-            const newIndex = Math.max(0, Math.min(columns[ci].length - 1, ni + moveBy));
-
-            if (newIndex !== ni) {
-                // Reorder
-                taskColumns.update(cols => {
-                    const newCols = [...cols];
-                    const col = [...newCols[ci]];
-                    const [moved] = col.splice(ni, 1);
-                    col.splice(newIndex, 0, moved);
-                    newCols[ci] = col;
-                    return newCols;
-                });
-
-                // Save new order
-                const movedNode = columns[ci]?.[ni];
-                if (movedNode) {
-                    try {
-                        await fetch(`${API_BASE}/tasks/${movedNode.id}`, {
-                            method: 'PATCH',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ order_index: newIndex })
-                        });
-                    } catch (e) {
-                        console.error('Order save failed:', e);
-                    }
-                }
-            }
-            dragState = null;
-        };
-
-        window.addEventListener('mousemove', onMove);
-        window.addEventListener('mouseup', onUp);
+        dragNode = node;
+        dragStart = { x: e.clientX, y: e.clientY };
+        dragNodeStart = { x: node.pos_x || 0, y: node.pos_y || 0 };
+        selectedId = node.id;
     }
 
-    // ── SVG Arrows ───────────────────────────────────────────────
-    function recalcArrows() {
-        if (!columnsContainerEl) { arrowPaths = []; return; }
+    // ── CONTEXT MENU ───────────────────────────────────────────
+    function handleContextMenu(e, node) {
+        e.preventDefault();
+        e.stopPropagation();
+        contextMenu = {
+            visible: true,
+            x: e.clientX,
+            y: e.clientY,
+            nodeId: node.id
+        };
+    }
 
-        const newPaths = [];
-        const containerRect = columnsContainerEl.getBoundingClientRect();
+    function ctxEdit() {
+        const node = getNode(contextMenu.nodeId);
+        if (node) openSidePanel(node);
+        contextMenu = { ...contextMenu, visible: false };
+    }
 
-        for (let colIdx = 0; colIdx < columns.length - 1; colIdx++) {
-            const parentId = activeNodes[colIdx];
-            if (!parentId) continue;
-
-            // Find parent card element
-            const parentEl = columnsContainerEl.querySelector(`[data-node-id="${parentId}"]`);
-            if (!parentEl) continue;
-
-            const parentRect = parentEl.getBoundingClientRect();
-            const x1 = parentRect.right - containerRect.left;
-            const y1 = parentRect.top + parentRect.height / 2 - containerRect.top;
-
-            // Find children in next column
-            const childCol = columns[colIdx + 1];
-            if (!childCol) continue;
-
-            for (const child of childCol) {
-                const childEl = columnsContainerEl.querySelector(`[data-node-id="${child.id}"]`);
-                if (!childEl) continue;
-
-                const childRect = childEl.getBoundingClientRect();
-                const x2 = childRect.left - containerRect.left;
-                const y2 = childRect.top + childRect.height / 2 - containerRect.top;
-
-                const cx1 = x1 + 40;
-                const cx2 = x2 - 40;
-
-                newPaths.push({
-                    d: `M ${x1} ${y1} C ${cx1} ${y1} ${cx2} ${y2} ${x2} ${y2}`,
-                    endX: x2,
-                    endY: y2,
-                    angle: Math.atan2(y2 - (y2), x2 - cx2)
-                });
+    async function ctxDelete() {
+        const id = contextMenu.nodeId;
+        contextMenu = { ...contextMenu, visible: false };
+        if (confirm('Delete this node and all its children?')) {
+            if (sidePanel.open && sidePanel.node?.id === id) {
+                sidePanel = { open: false, node: null };
             }
+            await deleteNode(id);
         }
-        arrowPaths = newPaths;
     }
 
-    // ── Helpers ───────────────────────────────────────────────────
+    function ctxPin() {
+        const id = contextMenu.nodeId;
+        if (pinnedIds.has(id)) {
+            pinnedIds.delete(id);
+        } else {
+            pinnedIds.add(id);
+        }
+        pinnedIds = new Set(pinnedIds);
+        contextMenu = { ...contextMenu, visible: false };
+    }
+
+    // ── SIDE PANEL ─────────────────────────────────────────────
+    function openSidePanel(node) {
+        editTitle = node.title || '';
+        editDescription = node.description || '';
+        editDueDate = node.due_date ? node.due_date.slice(0, 10) : '';
+        sidePanel = { open: true, node };
+    }
+
+    function closeSidePanel() {
+        sidePanel = { open: false, node: null };
+    }
+
+    async function saveSidePanel() {
+        if (!sidePanel.node) return;
+        const updates = { title: editTitle, description: editDescription || null };
+        if (editDueDate) updates.due_date = editDueDate;
+        else updates.due_date = null;
+        await patchNode(sidePanel.node.id, updates);
+        sidePanel = { open: true, node: { ...sidePanel.node, ...updates } };
+    }
+
+    async function deleteSidePanelNode() {
+        if (!sidePanel.node) return;
+        if (confirm('Delete this node and all its children?')) {
+            const id = sidePanel.node.id;
+            closeSidePanel();
+            await deleteNode(id);
+        }
+    }
+
+    // ── CHECKBOXES ─────────────────────────────────────────────
+    async function toggleDone(e, nodeId) {
+        e.stopPropagation();
+        const node = getNode(nodeId);
+        if (!node) return;
+        const newStatus = node.status === 'done' ? 'pending' : 'done';
+        nodes = nodes.map(n => n.id === nodeId ? { ...n, status: newStatus } : n);
+        await patchNode(nodeId, { status: newStatus });
+    }
+
+    async function toggleSession(e, nodeId) {
+        e.stopPropagation();
+        const node = getNode(nodeId);
+        if (!node) return;
+        const newVal = !node.session_queued;
+        nodes = nodes.map(n => n.id === nodeId ? { ...n, session_queued: newVal } : n);
+        await patchNode(nodeId, { session_queued: newVal });
+    }
+
+    // ── NEW ROADMAP ────────────────────────────────────────────
+    async function submitNewRoadmap(e) {
+        e.preventDefault();
+        if (!formTitle.trim()) return;
+
+        // Get live dimensions from svgEl, fallback to window
+        const cw = svgEl ? svgEl.clientWidth : window.innerWidth;
+        const ch = svgEl ? svgEl.clientHeight : window.innerHeight;
+
+        const px = (cw / 2 - panX) / zoom - CARD_W / 2;
+        const py = (ch / 2 - panY) / zoom - CARD_MIN_H / 2;
+
+        const payload = {
+            title: formTitle,
+            parent_id: null,
+            node_type: 'task',
+            task_type: formDirection,
+            pos_x: px,
+            pos_y: py,
+        };
+        if (formDescription) payload.description = formDescription;
+        if (formDueDate) payload.due_date = formDueDate;
+
+        console.log('Creating node with:', payload);
+        const created = await createNode(payload);
+        console.log('Response from backend:', created);
+        console.log('Nodes after update:', nodes);
+
+        showNewModal = false;
+        formTitle = '';
+        formDescription = '';
+        formDueDate = '';
+        formDirection = 'tb';
+    }
+
+    // ── ADD CHILD ──────────────────────────────────────────────
+    async function addChild(parentNode) {
+        const siblings = childrenOf(parentNode.id);
+        const dir = nodeDirection(parentNode);
+        let px, py;
+        if (dir === 'lr') {
+            px = (parentNode.pos_x || 0) + 240;
+            py = (parentNode.pos_y || 0) + siblings.length * 110;
+        } else {
+            px = (parentNode.pos_x || 0) + siblings.length * 220;
+            py = (parentNode.pos_y || 0) + 120 + siblings.length * 0;
+        }
+
+        const created = await createNode({
+            title: '',
+            parent_id: parentNode.id,
+            node_type: 'task',
+            task_type: parentNode.task_type,
+            pos_x: px,
+            pos_y: py,
+        });
+        if (created) {
+            openSidePanel(created);
+        }
+    }
+
+    // ── ARROWS ─────────────────────────────────────────────────
+    function getArrows(nodeList) {
+        const arrows = [];
+        for (const node of nodeList) {
+            if (node.parent_id === null) continue;
+            const parent = getNode(node.parent_id);
+            if (!parent) continue;
+
+            const dir = nodeDirection(node);
+            const pH = cardHeight(parent);
+            const cH = cardHeight(node);
+
+            let d;
+            if (dir === 'lr') {
+                const x1 = (parent.pos_x || 0) + CARD_W;
+                const y1 = (parent.pos_y || 0) + pH / 2;
+                const x2 = node.pos_x || 0;
+                const y2 = (node.pos_y || 0) + cH / 2;
+                const cp = 60;
+                d = `M ${x1} ${y1} C ${x1 + cp} ${y1} ${x2 - cp} ${y2} ${x2} ${y2}`;
+            } else {
+                const x1 = (parent.pos_x || 0) + CARD_W / 2;
+                const y1 = (parent.pos_y || 0) + pH;
+                const x2 = (node.pos_x || 0) + CARD_W / 2;
+                const y2 = node.pos_y || 0;
+                const cp = 50;
+                d = `M ${x1} ${y1} C ${x1} ${y1 + cp} ${x2} ${y2 - cp} ${x2} ${y2}`;
+            }
+
+            arrows.push({ d, id: `${parent.id}-${node.id}` });
+        }
+        return arrows;
+    }
+
+    $: arrows = getArrows(nodes);
+
+    // ── HELPERS ────────────────────────────────────────────────
     function formatDate(dateString) {
         if (!dateString) return '';
         const d = new Date(dateString);
@@ -433,368 +423,241 @@
         const da = String(d.getDate()).padStart(2, '0');
         return `${mo}/${da}`;
     }
-
-    function formatCreatedDate(dateString) {
-        if (!dateString) return '';
-        const d = new Date(dateString);
-        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-    }
-
-    function penaltyLabel(level) {
-        const labels = ['none', 'mild', 'moderate', 'strict'];
-        return labels[level] || 'none';
-    }
-
-    $: pinnedCount = pinned.length;
-    $: canvasWidth = Math.max(
-        (pinned.length > 0 ? 236 : 0) + columns.length * 280 + 100,
-        100
-    );
-    $: canvasHeight = '100%';
 </script>
 
-<div class="tasks-page">
+<div class="tasks-page" bind:this={containerEl}>
     <!-- Top bar -->
     <header class="tasks-header">
         <div class="header-left">
-            <h1>Tasks</h1>
-            {#if pinnedCount > 0}
-                <span class="pin-count">
-                    <Pin size={12} />
-                    {pinnedCount} pinned
-                </span>
+            <h1>Roadmap</h1>
+            {#if rootNodes.length > 0}
+                <span class="roadmap-count">{rootNodes.length} roadmap{rootNodes.length !== 1 ? 's' : ''}</span>
             {/if}
         </div>
-        <button class="new-node-btn" on:click={() => showNewModal = true}>
+        <button class="new-roadmap-btn" on:click={() => showNewModal = true}>
             <Plus size={14} />
-            New Node
+            New Roadmap
         </button>
     </header>
 
-    <!-- Canvas -->
-    <div class="canvas" bind:this={canvasEl}>
-        <div class="canvas-inner" bind:this={columnsContainerEl} style="min-width: {canvasWidth}px;">
-            <!-- SVG Arrow layer -->
-            <svg class="arrow-layer" style="min-width: {canvasWidth}px;">
-                <defs>
-                    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-                        <polygon points="0 0, 8 3, 0 6" fill="var(--accent)" fill-opacity="0.5" />
-                    </marker>
-                </defs>
-                {#each arrowPaths as arrow}
+    <!-- SVG Canvas -->
+    <div class="canvas-container">
+        <!-- svelte-ignore a11y-no-static-element-interactions -->
+        <svg
+            class="canvas-svg"
+            bind:this={svgEl}
+            on:wheel|preventDefault={handleWheel}
+            on:mousedown={handleCanvasMouseDown}
+            on:mousemove={handleCanvasMouseMove}
+            on:mouseup={handleCanvasMouseUp}
+            on:mouseleave={handleCanvasMouseUp}
+        >
+            <rect class="canvas-bg" width="100%" height="100%" fill="var(--bg-base)" />
+
+            <defs>
+                <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+                    <polygon points="0 0, 8 3, 0 6" fill="var(--text-tertiary)" fill-opacity="0.6" />
+                </marker>
+            </defs>
+
+            <g transform="translate({panX},{panY}) scale({zoom})">
+                <!-- Arrows -->
+                {#each arrows as arrow (arrow.id)}
                     <path
                         d={arrow.d}
                         fill="none"
-                        stroke="var(--accent)"
-                        stroke-opacity="0.3"
+                        stroke="var(--text-tertiary)"
                         stroke-width="1.5"
+                        stroke-opacity="0.6"
                         marker-end="url(#arrowhead)"
                     />
                 {/each}
-            </svg>
 
-            <!-- Pinned column -->
-            {#if pinned.length > 0}
-                <div class="column pinned-column">
-                    <div class="column-label">
-                        <Pin size={12} />
-                        Pinned
-                    </div>
-                    <div class="column-scroll">
-                        {#each pinned as node (node.id)}
-                            <div
-                                class="card pinned-card"
-                                class:group-card={node.node_type === 'group'}
-                                class:task-card={node.node_type === 'task'}
-                                class:done={node.status === 'done'}
-                                data-node-id="pinned-{node.id}"
-                                on:mouseenter={() => hoveredCardId = `pin-${node.id}`}
-                                on:mouseleave={() => hoveredCardId = null}
-                            >
-                                <!-- Pin icon (unpin) -->
-                                <button class="pin-btn pinned-active" on:click={(e) => togglePin(e, node)} title="Unpin">
-                                    <Pin size={13} />
+                <!-- Nodes -->
+                {#each nodes as node (node.id)}
+                    {@const kids = childrenOf(node.id)}
+                    {@const h = cardHeight(node)}
+                    {@const isSelected = selectedId === node.id}
+                    {@const isPinned = pinnedIds.has(node.id)}
+                    {@const isHovered = hoveredNodeId === node.id}
+                    {@const dir = nodeDirection(node)}
+                    <foreignObject
+                        x={node.pos_x || 0}
+                        y={node.pos_y || 0}
+                        width={CARD_W}
+                        height={h + 40}
+                        style="overflow: visible;"
+                    >
+                        <!-- svelte-ignore a11y-no-static-element-interactions -->
+                        <div
+                            class="node-card"
+                            class:selected={isSelected}
+                            class:pinned={isPinned}
+                            class:done={node.status === 'done'}
+                            style="width: {CARD_W}px; min-height: {CARD_MIN_H}px;"
+                            on:mousedown={(e) => handleNodeMouseDown(e, node)}
+                            on:contextmenu={(e) => handleContextMenu(e, node)}
+                            on:mouseenter={() => hoveredNodeId = node.id}
+                            on:mouseleave={() => hoveredNodeId = null}
+                        >
+                            <!-- Header row -->
+                            <div class="node-header">
+                                <!-- Done checkbox -->
+                                <button class="done-ring" class:checked={node.status === 'done'} on:mousedown|stopPropagation on:click={(e) => toggleDone(e, node.id)}>
+                                    {#if node.status === 'done'}
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                    {/if}
                                 </button>
 
-                                {#if node.node_type === 'group'}
-                                    <div class="card-icon">
-                                        <FolderOpen size={16} />
-                                    </div>
-                                    <div class="card-title">{node.title}</div>
-                                    {#if node.due_date}
-                                        <div class="card-date">{formatDate(node.due_date)}</div>
-                                    {/if}
-                                    <div class="child-badge">{node.child_count || 0}</div>
-                                    <div class="progress-track">
-                                        <div class="progress-fill" style="width: {node.progress || 0}%"></div>
-                                    </div>
-                                {:else}
-                                    <button class="checkbox" class:checked={node.status === 'done'} on:click={(e) => toggleTask(e, node)}>
-                                        {#if node.status === 'done'}
-                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                        {/if}
-                                    </button>
-                                    <div class="card-title" class:strikethrough={node.status === 'done'}>{node.title}</div>
-                                    {#if node.priority}
-                                        <span class="priority-pill priority-{node.priority}">{node.priority}</span>
-                                    {/if}
-                                    {#if node.due_date}
-                                        <div class="card-date">{formatDate(node.due_date)}</div>
-                                    {/if}
-                                    {#if node.estimated_mins}
-                                        <div class="card-est">{node.estimated_mins}m</div>
-                                    {/if}
-                                {/if}
-                            </div>
-                        {/each}
-                    </div>
-                </div>
-            {/if}
+                                <!-- Title -->
+                                <span class="node-title" class:strikethrough={node.status === 'done'}>
+                                    {node.title || 'Untitled'}
+                                </span>
 
-            <!-- Tree columns -->
-            {#each columns as col, colIndex (colIndex)}
-                <div class="column">
-                    <div class="column-label">
-                        {#if colIndex === 0}
-                            Root
-                        {:else}
-                            Depth {colIndex}
-                        {/if}
-                    </div>
-                    <div class="column-scroll">
-                        {#if loading && colIndex === columns.length - 1 && col.length === 0}
-                            <div class="col-loading">
-                                <div class="pulse-dot"></div>
-                                <div class="pulse-dot d2"></div>
-                                <div class="pulse-dot d3"></div>
+                                <!-- Session checkbox -->
+                                <button class="session-square" class:queued={node.session_queued} on:mousedown|stopPropagation on:click={(e) => toggleSession(e, node.id)}>
+                                    {#if node.session_queued}
+                                        <Zap size={10} />
+                                    {/if}
+                                </button>
                             </div>
-                        {:else if col.length === 0}
-                            <div class="col-empty">No items</div>
-                        {:else}
-                            {#each col as node, nodeIndex (node.id)}
-                                {@const isActive = activeNodes[colIndex] === node.id}
-                                {@const isDragging = dragState && dragState.colIndex === colIndex && dragState.nodeIndex === nodeIndex}
-                                {@const isPinned = isNodePinned(node.id)}
-                                <div
-                                    class="card"
-                                    class:group-card={node.node_type === 'group'}
-                                    class:task-card={node.node_type === 'task'}
-                                    class:active={isActive}
-                                    class:dragging={isDragging}
-                                    class:done={node.status === 'done'}
-                                    data-node-id={node.id}
-                                    style={isDragging ? `transform: translateY(${dragState.offsetY}px) scale(1.05); z-index: 50;` : ''}
-                                    on:mouseenter={() => hoveredCardId = node.id}
-                                    on:mouseleave={() => hoveredCardId = null}
-                                    on:click={(e) => {
-                                        if (node.node_type === 'group') {
-                                            handleGroupClick(colIndex, node);
-                                        } else {
-                                            openDetail(e, node);
-                                        }
-                                    }}
+
+                            <!-- Children list -->
+                            {#if kids.length > 0}
+                                <div class="children-divider"></div>
+                                <div class="children-list">
+                                    {#each kids as child (child.id)}
+                                        <div class="child-row">
+                                            <button class="done-ring small" class:checked={child.status === 'done'} on:mousedown|stopPropagation on:click={(e) => toggleDone(e, child.id)}>
+                                                {#if child.status === 'done'}
+                                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                                {/if}
+                                            </button>
+                                            <span class="child-title" class:strikethrough={child.status === 'done'}>{child.title || 'Untitled'}</span>
+                                            <button class="session-square small" class:queued={child.session_queued} on:mousedown|stopPropagation on:click={(e) => toggleSession(e, child.id)}>
+                                                {#if child.session_queued}
+                                                    <Zap size={8} />
+                                                {/if}
+                                            </button>
+                                        </div>
+                                    {/each}
+                                </div>
+                            {/if}
+
+                            <!-- Add child button on hover -->
+                            {#if isHovered}
+                                <button
+                                    class="add-child-btn"
+                                    class:bottom={dir === 'tb'}
+                                    class:right-side={dir === 'lr'}
+                                    on:mousedown|stopPropagation
+                                    on:click|stopPropagation={() => addChild(node)}
+                                    title="Add child node"
                                 >
-                                    <!-- Drag handle -->
-                                    <button
-                                        class="drag-handle"
-                                        on:mousedown={(e) => startDrag(e, colIndex, nodeIndex, node)}
-                                        title="Drag to reorder"
-                                    >
-                                        <GripVertical size={12} />
-                                    </button>
+                                    <Plus size={12} />
+                                </button>
+                            {/if}
 
-                                    <!-- Pin button (visible on hover) -->
-                                    <button
-                                        class="pin-btn"
-                                        class:pinned-active={isPinned}
-                                        class:visible={hoveredCardId === node.id || isPinned}
-                                        on:click={(e) => togglePin(e, node)}
-                                        title={isPinned ? 'Unpin' : 'Pin'}
-                                    >
-                                        <Pin size={13} />
-                                    </button>
-
-                                    {#if node.node_type === 'group'}
-                                        <!-- Group card content -->
-                                        <div class="card-icon">
-                                            <FolderOpen size={16} />
-                                        </div>
-                                        <div class="card-title">{node.title}</div>
-                                        {#if node.due_date}
-                                            <div class="card-date">{formatDate(node.due_date)}</div>
-                                        {/if}
-                                        <div class="child-badge">{node.child_count || 0}</div>
-                                        <div class="progress-track">
-                                            <div class="progress-fill" style="width: {node.progress || 0}%"></div>
-                                        </div>
-
-                                        <!-- Hover overlay for groups -->
-                                        {#if hoveredCardId === node.id}
-                                            <div class="hover-overlay">
-                                                {#if node.estimated_mins}
-                                                    <span>Est: {node.estimated_mins}m</span>
-                                                {/if}
-                                                {#if node.penalty_level > 0}
-                                                    <span>Penalty: {penaltyLabel(node.penalty_level)}</span>
-                                                {/if}
-                                                {#if node.created_at}
-                                                    <span>Created: {formatCreatedDate(node.created_at)}</span>
-                                                {/if}
-                                            </div>
-                                        {/if}
-                                    {:else}
-                                        <!-- Task card content -->
-                                        <button class="checkbox" class:checked={node.status === 'done'} on:click={(e) => toggleTask(e, node)}>
-                                            {#if node.status === 'done'}
-                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                            {/if}
-                                        </button>
-                                        <div class="card-title" class:strikethrough={node.status === 'done'}>{node.title}</div>
-                                        {#if node.priority}
-                                            <span class="priority-pill priority-{node.priority}">{node.priority}</span>
-                                        {/if}
-                                        {#if node.due_date}
-                                            <div class="card-date">{formatDate(node.due_date)}</div>
-                                        {/if}
-                                        {#if node.estimated_mins}
-                                            <div class="card-est">{node.estimated_mins}m</div>
-                                        {/if}
-                                        {#if node.penalty_level > 0}
-                                            <span class="penalty-badge">{penaltyLabel(node.penalty_level)}</span>
-                                        {/if}
-
-                                        <!-- Hover description -->
-                                        {#if hoveredCardId === node.id && node.description}
-                                            <div class="hover-overlay">
-                                                <span class="desc-text">{node.description}</span>
-                                            </div>
-                                        {/if}
+                            <!-- Hover info tooltip -->
+                            {#if isHovered && (node.description || node.due_date)}
+                                <div class="info-tooltip">
+                                    {#if node.description}
+                                        <p class="tooltip-desc">{node.description}</p>
+                                    {/if}
+                                    {#if node.due_date}
+                                        <span class="tooltip-date">Due: {formatDate(node.due_date)}</span>
                                     {/if}
                                 </div>
-                            {/each}
-                        {/if}
-                    </div>
-                </div>
-            {/each}
-        </div>
+                            {/if}
+                        </div>
+                    </foreignObject>
+                {/each}
+            </g>
+        </svg>
     </div>
 </div>
 
-<!-- ═══ NEW NODE MODAL ═══ -->
+<!-- ═══ CONTEXT MENU ═══ -->
+{#if contextMenu.visible}
+    <!-- svelte-ignore a11y-no-static-element-interactions -->
+    <div class="ctx-menu" style="left: {contextMenu.x}px; top: {contextMenu.y}px;" on:click|stopPropagation>
+        <button class="ctx-item" on:click={ctxEdit}>Edit</button>
+        <button class="ctx-item danger" on:click={ctxDelete}>Delete</button>
+        <button class="ctx-item" on:click={ctxPin}>
+            {pinnedIds.has(contextMenu.nodeId) ? 'Unpin' : 'Pin'}
+        </button>
+    </div>
+{/if}
+
+<!-- ═══ SIDE PANEL ═══ -->
+<div class="side-panel" class:open={sidePanel.open}>
+    <div class="panel-header">
+        <h3>Edit Node</h3>
+        <button class="panel-close" on:click={closeSidePanel}>
+            <X size={16} />
+        </button>
+    </div>
+    <div class="panel-body">
+        <div class="form-group">
+            <label>Title</label>
+            <input type="text" bind:value={editTitle} placeholder="Node title" />
+        </div>
+        <div class="form-group">
+            <label>Description</label>
+            <textarea bind:value={editDescription} rows="3" placeholder="Optional description..."></textarea>
+        </div>
+        <div class="form-group">
+            <label>Due Date</label>
+            <input type="date" bind:value={editDueDate} />
+        </div>
+    </div>
+    <div class="panel-actions">
+        <button class="btn-save" on:click={saveSidePanel}>Save</button>
+        <button class="btn-delete" on:click={deleteSidePanelNode}>
+            <Trash2 size={14} />
+            Delete
+        </button>
+    </div>
+</div>
+
+<!-- ═══ NEW ROADMAP MODAL ═══ -->
 {#if showNewModal}
+    <!-- svelte-ignore a11y-no-static-element-interactions -->
     <div class="modal-backdrop" on:click={() => showNewModal = false}>
         <div class="modal" on:click|stopPropagation>
             <div class="modal-header">
-                <h2>New Node</h2>
+                <h2>New Roadmap</h2>
                 <button class="modal-close" on:click={() => showNewModal = false}>
                     <X size={18} />
                 </button>
             </div>
-            <form on:submit={submitNode}>
-                <div class="form-group toggles">
-                    <button type="button" class="toggle-btn" class:active={formType === 'Group'} on:click={() => formType = 'Group'}>Group</button>
-                    <button type="button" class="toggle-btn" class:active={formType === 'Task'} on:click={() => formType = 'Task'}>Task</button>
-                </div>
-
+            <form on:submit={submitNewRoadmap}>
                 <div class="form-group">
                     <label>Title <span class="req">*</span></label>
-                    <input type="text" bind:value={formTitle} required placeholder="{formType} title" />
-                </div>
-
-                <div class="form-group">
-                    <label>Due Date</label>
-                    <input type="datetime-local" bind:value={formDueDate} />
-                </div>
-
-                {#if formType === 'Task'}
-                    <div class="form-group">
-                        <label>Priority</label>
-                        <div class="priority-selector">
-                            <button type="button" class="prio-btn low" class:selected={formPriority === 'low'} on:click={() => formPriority = 'low'}>Low</button>
-                            <button type="button" class="prio-btn med" class:selected={formPriority === 'med'} on:click={() => formPriority = 'med'}>Med</button>
-                            <button type="button" class="prio-btn high" class:selected={formPriority === 'high'} on:click={() => formPriority = 'high'}>High</button>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label>Estimated Minutes</label>
-                        <input type="number" bind:value={formEstimatedMinutes} min="0" placeholder="e.g. 30" />
-                    </div>
-                    <div class="form-group">
-                        <label>Penalty Level</label>
-                        <div class="penalty-selector">
-                            {#each [0, 1, 2, 3] as lvl}
-                                <button type="button" class="penalty-opt" class:selected={formPenaltyLevel === lvl} on:click={() => formPenaltyLevel = lvl}>
-                                    <span class="penalty-num">{lvl}</span>
-                                    <span class="penalty-lbl">{penaltyLabel(lvl)}</span>
-                                </button>
-                            {/each}
-                        </div>
-                    </div>
-                {/if}
-
-                <div class="form-actions">
-                    <button type="button" class="btn-cancel" on:click={() => showNewModal = false}>Cancel</button>
-                    <button type="submit" class="btn-submit">Create</button>
-                </div>
-            </form>
-        </div>
-    </div>
-{/if}
-
-<!-- ═══ DETAIL MODAL ═══ -->
-{#if showDetailModal && detailNode}
-    <div class="modal-backdrop" on:click={() => showDetailModal = false}>
-        <div class="modal detail-modal" on:click|stopPropagation>
-            <div class="modal-header">
-                <h2>Edit Task</h2>
-                <div class="modal-header-actions">
-                    <button class="delete-btn" on:click={deleteNode} title="Delete">
-                        <Trash2 size={16} />
-                    </button>
-                    <button class="modal-close" on:click={() => showDetailModal = false}>
-                        <X size={18} />
-                    </button>
-                </div>
-            </div>
-            <form on:submit|preventDefault={saveDetail}>
-                <div class="form-group">
-                    <label>Title</label>
-                    <input type="text" bind:value={editTitle} required />
+                    <input type="text" bind:value={formTitle} required placeholder="Roadmap title" />
                 </div>
                 <div class="form-group">
                     <label>Description</label>
-                    <textarea bind:value={editDescription} rows="3" placeholder="Add description..."></textarea>
-                </div>
-                <div class="form-group">
-                    <label>Priority</label>
-                    <div class="priority-selector">
-                        <button type="button" class="prio-btn low" class:selected={editPriority === 'low'} on:click={() => editPriority = 'low'}>Low</button>
-                        <button type="button" class="prio-btn med" class:selected={editPriority === 'med'} on:click={() => editPriority = 'med'}>Med</button>
-                        <button type="button" class="prio-btn high" class:selected={editPriority === 'high'} on:click={() => editPriority = 'high'}>High</button>
-                    </div>
+                    <textarea bind:value={formDescription} rows="2" placeholder="Optional description..."></textarea>
                 </div>
                 <div class="form-group">
                     <label>Due Date</label>
-                    <input type="datetime-local" bind:value={editDueDate} />
+                    <input type="date" bind:value={formDueDate} />
                 </div>
                 <div class="form-group">
-                    <label>Estimated Minutes</label>
-                    <input type="number" bind:value={editEstimatedMinutes} min="0" />
-                </div>
-                <div class="form-group">
-                    <label>Penalty Level</label>
-                    <div class="penalty-selector">
-                        {#each [0, 1, 2, 3] as lvl}
-                            <button type="button" class="penalty-opt" class:selected={editPenaltyLevel === lvl} on:click={() => editPenaltyLevel = lvl}>
-                                <span class="penalty-num">{lvl}</span>
-                                <span class="penalty-lbl">{penaltyLabel(lvl)}</span>
-                            </button>
-                        {/each}
+                    <label>Direction</label>
+                    <div class="dir-toggle">
+                        <button type="button" class="dir-btn" class:active={formDirection === 'tb'} on:click={() => formDirection = 'tb'}>
+                            ↓ Top-to-Bottom
+                        </button>
+                        <button type="button" class="dir-btn" class:active={formDirection === 'lr'} on:click={() => formDirection = 'lr'}>
+                            → Left-to-Right
+                        </button>
                     </div>
                 </div>
                 <div class="form-actions">
-                    <button type="button" class="btn-cancel" on:click={() => showDetailModal = false}>Cancel</button>
-                    <button type="submit" class="btn-submit">Save</button>
+                    <button type="button" class="btn-cancel" on:click={() => showNewModal = false}>Cancel</button>
+                    <button type="submit" class="btn-submit">Create</button>
                 </div>
             </form>
         </div>
@@ -834,20 +697,17 @@
         color: var(--text-primary);
     }
 
-    .pin-count {
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
+    .roadmap-count {
         font-family: var(--font-mono);
-        font-size: 12px;
-        color: var(--accent);
-        background: var(--accent-dim);
-        padding: 4px 10px;
-        border-radius: 12px;
-        border: 1px solid rgba(139, 92, 246, 0.12);
+        font-size: 11px;
+        color: var(--text-secondary);
+        background: var(--bg-elevated);
+        padding: 3px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
     }
 
-    .new-node-btn {
+    .new-roadmap-btn {
         display: inline-flex;
         align-items: center;
         gap: 6px;
@@ -862,292 +722,128 @@
         cursor: pointer;
         transition: all 0.2s ease;
     }
-    .new-node-btn:hover {
+    .new-roadmap-btn:hover {
         background: var(--accent-hover);
         transform: translateY(-1px);
         box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
     }
 
     /* ═══ CANVAS ═══ */
-    .canvas {
+    .canvas-container {
         flex: 1;
-        overflow-x: auto;
-        overflow-y: hidden;
-        scroll-behavior: smooth;
+        overflow: hidden;
         position: relative;
         background: var(--bg-base);
-        /* Diagonal grid texture */
-        background-image:
-            repeating-linear-gradient(
-                45deg,
-                transparent,
-                transparent 19px,
-                rgba(255, 255, 255, 0.03) 19px,
-                rgba(255, 255, 255, 0.03) 20px
-            ),
-            repeating-linear-gradient(
-                -45deg,
-                transparent,
-                transparent 19px,
-                rgba(255, 255, 255, 0.03) 19px,
-                rgba(255, 255, 255, 0.03) 20px
-            );
     }
 
-    .canvas-inner {
-        display: flex;
-        gap: 0;
-        padding: 24px 20px;
-        height: 100%;
-        position: relative;
-    }
-
-    /* ═══ SVG ARROWS ═══ */
-    .arrow-layer {
-        position: absolute;
-        top: 0;
-        left: 0;
+    .canvas-svg {
         width: 100%;
         height: 100%;
-        pointer-events: none;
-        z-index: 1;
-    }
-
-    /* ═══ COLUMNS ═══ */
-    .column {
-        flex-shrink: 0;
-        width: 220px;
-        margin-right: 60px;
-        display: flex;
-        flex-direction: column;
-        position: relative;
-        z-index: 2;
-    }
-
-    .pinned-column {
-        border-right: 1px solid var(--border);
-        padding-right: 16px;
-        margin-right: 44px;
-    }
-
-    .column-label {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        font-family: var(--font-mono);
-        font-size: 10px;
-        color: var(--text-tertiary);
-        text-transform: uppercase;
-        letter-spacing: 1.2px;
-        margin-bottom: 16px;
-        padding-left: 4px;
-    }
-
-    .column-scroll {
-        flex: 1;
-        overflow-y: auto;
-        overflow-x: hidden;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        padding-right: 4px;
-        padding-bottom: 20px;
-    }
-
-    .col-loading {
-        display: flex;
-        gap: 6px;
-        align-items: center;
-        justify-content: center;
-        padding: 40px 0;
-    }
-
-    .pulse-dot {
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        background: var(--accent);
-        animation: pulse 1s ease-in-out infinite;
-    }
-    .pulse-dot.d2 { animation-delay: 0.15s; }
-    .pulse-dot.d3 { animation-delay: 0.3s; }
-
-    @keyframes pulse {
-        0%, 100% { opacity: 0.2; transform: scale(0.8); }
-        50% { opacity: 1; transform: scale(1.2); }
-    }
-
-    .col-empty {
-        font-family: var(--font-mono);
-        font-size: 11px;
-        color: var(--text-tertiary);
-        text-align: center;
-        padding: 40px 0;
-    }
-
-    /* ═══ CARD BASE ═══ */
-    .card {
-        width: 200px;
-        height: 120px;
-        background: var(--bg-surface);
-        border: 1px solid var(--border);
-        border-radius: var(--radius-md);
-        padding: 12px;
-        position: relative;
-        cursor: pointer;
-        transition: all 0.25s ease;
-        display: flex;
-        flex-direction: column;
-        flex-shrink: 0;
-        overflow: visible;
-    }
-
-    .card:hover {
-        border-color: var(--border-active);
-    }
-
-    .card.group-card:hover {
-        transform: scale(1.03);
-    }
-
-    .card.task-card:hover {
-        transform: scale(1.02);
-    }
-
-    .card.active {
-        background: var(--accent-dim);
-        border-left: 3px solid var(--accent);
-    }
-
-    .card.dragging {
-        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
-        opacity: 0.95;
-    }
-
-    .card.pinned-card {
-        border: 1px solid rgba(139, 92, 246, 0.15);
-        box-shadow: 0 0 12px rgba(139, 92, 246, 0.06);
-    }
-
-    /* ═══ DRAG HANDLE ═══ */
-    .drag-handle {
-        position: absolute;
-        top: 4px;
-        left: 4px;
-        background: none;
-        border: none;
-        color: var(--text-tertiary);
+        display: block;
         cursor: grab;
-        padding: 2px;
-        opacity: 0;
-        transition: opacity 0.2s;
-        z-index: 5;
+        user-select: none;
     }
-    .card:hover .drag-handle {
-        opacity: 0.6;
-    }
-    .drag-handle:hover {
-        opacity: 1 !important;
-        color: var(--text-secondary);
-    }
-    .drag-handle:active {
+    .canvas-svg:active {
         cursor: grabbing;
     }
 
-    /* ═══ PIN BUTTON ═══ */
-    .pin-btn {
-        position: absolute;
-        top: 6px;
-        right: 6px;
-        background: none;
-        border: none;
-        color: var(--text-tertiary);
-        cursor: pointer;
-        padding: 3px;
-        border-radius: 4px;
-        opacity: 0;
-        transition: all 0.2s;
-        z-index: 5;
-    }
-    .pin-btn.visible,
-    .card:hover .pin-btn {
-        opacity: 1;
-    }
-    .pin-btn:hover {
-        color: var(--accent);
-        background: var(--accent-dim);
-    }
-    .pin-btn.pinned-active {
-        color: var(--accent);
-        opacity: 1;
-    }
-
-    /* ═══ GROUP CARD ═══ */
-    .card-icon {
-        color: var(--accent);
-        margin-bottom: 2px;
-    }
-
-    .card-title {
+    /* ═══ NODE CARD ═══ */
+    .node-card {
+        background: var(--bg-surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 0;
+        cursor: grab;
+        transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+        position: relative;
+        overflow: visible;
         font-family: var(--font-sans);
+    }
+    .node-card:active {
+        cursor: grabbing;
+    }
+    .node-card:hover {
+        border-color: var(--border-active);
+    }
+    .node-card.selected {
+        transform: scale(1.06);
+        box-shadow: 0 8px 32px rgba(109, 93, 252, 0.18);
+        z-index: 10;
+    }
+    .node-card.pinned {
+        border-color: var(--accent);
+    }
+    .node-card.done {
+        opacity: 0.7;
+    }
+
+    /* ═══ NODE HEADER ═══ */
+    .node-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 10px 10px 10px;
+        min-height: 42px;
+    }
+
+    .node-title {
+        flex: 1;
         font-size: 13px;
         font-weight: 500;
         color: var(--text-primary);
-        line-height: 1.3;
+        text-align: center;
+        white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        display: -webkit-box;
-        -webkit-line-clamp: 2;
-        -webkit-box-orient: vertical;
+        line-height: 1.3;
     }
-    .card-title.strikethrough {
+    .node-title.strikethrough {
         text-decoration: line-through;
         color: var(--text-secondary);
     }
 
-    .card-date {
-        font-family: var(--font-mono);
-        font-size: 10px;
-        color: var(--text-secondary);
-        margin-top: auto;
-    }
-
-    .child-badge {
-        position: absolute;
-        top: 8px;
-        right: 28px;
-        background: var(--bg-elevated);
-        border: 1px solid var(--border);
-        color: var(--text-secondary);
-        font-family: var(--font-mono);
-        font-size: 10px;
-        padding: 1px 7px;
-        border-radius: 10px;
-    }
-
-    .progress-track {
-        position: absolute;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        height: 3px;
-        background: var(--bg-elevated);
-        border-radius: 0 0 var(--radius-md) var(--radius-md);
-        overflow: hidden;
-    }
-
-    .progress-fill {
-        height: 100%;
-        background: var(--accent);
-        transition: width 0.4s ease;
-        border-radius: 0 0 0 var(--radius-md);
-    }
-
-    /* ═══ TASK CARD ═══ */
-    .checkbox {
+    /* ═══ DONE RING CHECKBOX ═══ */
+    .done-ring {
         flex-shrink: 0;
-        width: 16px;
-        height: 16px;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        border: 1.5px solid var(--border-active);
+        background: transparent;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: transparent;
+        transition: all 0.2s ease;
+        padding: 0;
+    }
+    .done-ring:hover {
+        border-color: var(--green);
+    }
+    .done-ring.checked {
+        background: var(--green);
+        border-color: var(--green);
+        color: #fff;
+    }
+    .done-ring svg {
+        width: 10px;
+        height: 10px;
+    }
+    .done-ring.small {
+        width: 14px;
+        height: 14px;
+    }
+    .done-ring.small svg {
+        width: 8px;
+        height: 8px;
+    }
+
+    /* ═══ SESSION SQUARE CHECKBOX ═══ */
+    .session-square {
+        flex-shrink: 0;
+        width: 18px;
+        height: 18px;
         border-radius: 4px;
         border: 1.5px solid var(--border-active);
         background: transparent;
@@ -1156,91 +852,258 @@
         align-items: center;
         justify-content: center;
         color: transparent;
-        transition: all 0.2s;
+        transition: all 0.2s ease;
         padding: 0;
-        margin-bottom: 4px;
     }
-    .checkbox.checked {
+    .session-square:hover {
+        border-color: var(--accent);
+    }
+    .session-square.queued {
         background: var(--accent);
         border-color: var(--accent);
         color: #fff;
     }
-    .checkbox svg {
-        width: 10px;
-        height: 10px;
+    .session-square.small {
+        width: 14px;
+        height: 14px;
     }
 
-    .priority-pill {
-        display: inline-block;
-        font-family: var(--font-mono);
-        font-size: 9px;
-        padding: 1px 7px;
-        border-radius: 8px;
-        text-transform: lowercase;
-        letter-spacing: 0.3px;
-        width: fit-content;
-        align-self: flex-start;
+    /* ═══ CHILDREN DIVIDER & LIST ═══ */
+    .children-divider {
+        height: 1px;
+        background: var(--border);
+        margin: 0 10px;
     }
-    .priority-high { background: rgba(244, 63, 94, 0.1); color: var(--red); }
-    .priority-med { background: rgba(251, 191, 36, 0.1); color: var(--amber); }
-    .priority-low { background: rgba(52, 211, 153, 0.1); color: var(--green); }
 
-    .card-est {
+    .children-list {
+        padding: 4px 10px 6px;
+    }
+
+    .child-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        height: 28px;
+    }
+
+    .child-title {
+        flex: 1;
+        font-size: 11px;
+        color: var(--text-secondary);
+        text-align: center;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .child-title.strikethrough {
+        text-decoration: line-through;
+        color: var(--text-tertiary);
+    }
+
+    /* ═══ ADD CHILD BUTTON ═══ */
+    .add-child-btn {
+        position: absolute;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        background: var(--accent);
+        border: none;
+        color: #fff;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        z-index: 20;
+        box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
+        animation: fadeIn 0.15s ease;
+    }
+    .add-child-btn.bottom {
+        bottom: -11px;
+        left: 50%;
+        transform: translateX(-50%);
+    }
+    .add-child-btn.right-side {
+        right: -11px;
+        top: 50%;
+        transform: translateY(-50%);
+    }
+    .add-child-btn:hover {
+        transform: translateX(-50%) scale(1.15);
+        box-shadow: 0 4px 12px rgba(139, 92, 246, 0.5);
+    }
+    .add-child-btn.right-side:hover {
+        transform: translateY(-50%) scale(1.15);
+    }
+
+    /* ═══ INFO TOOLTIP ═══ */
+    .info-tooltip {
+        position: absolute;
+        top: 0;
+        left: calc(100% + 8px);
+        width: 180px;
+        background: var(--bg-surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px 12px;
+        z-index: 30;
+        animation: slideInRight 0.2s ease;
+        pointer-events: none;
+    }
+    .tooltip-desc {
+        font-size: 11px;
+        color: var(--text-secondary);
+        line-height: 1.4;
+        margin: 0 0 6px 0;
+    }
+    .tooltip-date {
         font-family: var(--font-mono);
         font-size: 10px;
         color: var(--text-tertiary);
-        position: absolute;
-        bottom: 8px;
-        right: 10px;
     }
 
-    .penalty-badge {
-        font-family: var(--font-mono);
-        font-size: 9px;
-        padding: 1px 6px;
-        border-radius: 6px;
-        background: rgba(244, 63, 94, 0.08);
-        color: var(--red);
-        position: absolute;
-        bottom: 8px;
-        left: 12px;
+    @keyframes slideInRight {
+        from { opacity: 0; transform: translateX(-8px); }
+        to { opacity: 1; transform: translateX(0); }
     }
 
-    /* ═══ HOVER OVERLAY ═══ */
-    .hover-overlay {
-        position: absolute;
-        top: 100%;
-        left: 0;
-        right: 0;
-        margin-top: 4px;
+    @keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+    }
+
+    /* ═══ CONTEXT MENU ═══ */
+    .ctx-menu {
+        position: fixed;
+        z-index: 300;
         background: var(--bg-elevated);
-        border: 1px solid var(--border-active);
-        border-radius: var(--radius-sm);
-        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 4px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+        animation: ctxScaleIn 0.12s ease;
+        min-width: 120px;
+    }
+    @keyframes ctxScaleIn {
+        from { opacity: 0; transform: scale(0.92); }
+        to { opacity: 1; transform: scale(1); }
+    }
+    .ctx-item {
+        display: block;
+        width: 100%;
+        padding: 0 12px;
+        height: 32px;
+        line-height: 32px;
+        background: none;
+        border: none;
+        color: var(--text-primary);
+        font-family: var(--font-sans);
+        font-size: 12px;
+        cursor: pointer;
+        border-radius: 6px;
+        text-align: left;
+        transition: background 0.15s;
+    }
+    .ctx-item:hover {
+        background: var(--bg-surface);
+    }
+    .ctx-item.danger:hover {
+        background: rgba(244, 63, 94, 0.1);
+        color: var(--red);
+    }
+
+    /* ═══ SIDE PANEL ═══ */
+    .side-panel {
+        position: fixed;
+        top: 0;
+        right: 0;
+        width: 280px;
+        height: 100vh;
+        background: var(--bg-elevated);
+        border-left: 1px solid var(--border);
+        z-index: 250;
         display: flex;
         flex-direction: column;
-        gap: 3px;
-        z-index: 20;
-        font-family: var(--font-mono);
-        font-size: 10px;
-        color: var(--text-secondary);
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-        animation: fadeSlideIn 0.15s ease;
+        transform: translateX(100%);
+        transition: transform 0.25s ease;
     }
-
-    .desc-text {
+    .side-panel.open {
+        transform: translateX(0);
+    }
+    .panel-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 20px;
+        border-bottom: 1px solid var(--border);
+    }
+    .panel-header h3 {
         font-family: var(--font-sans);
-        font-size: 11px;
-        line-height: 1.4;
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+    .panel-close {
+        background: none;
+        border: none;
         color: var(--text-secondary);
+        cursor: pointer;
+        padding: 4px;
+        border-radius: 4px;
+        transition: all 0.15s;
+    }
+    .panel-close:hover {
+        color: var(--text-primary);
+        background: var(--bg-hover);
+    }
+    .panel-body {
+        flex: 1;
+        padding: 20px;
+        overflow-y: auto;
+    }
+    .panel-actions {
+        padding: 16px 20px;
+        border-top: 1px solid var(--border);
+        display: flex;
+        gap: 8px;
+    }
+    .btn-save {
+        flex: 1;
+        background: var(--accent);
+        border: none;
+        color: #fff;
+        padding: 8px 16px;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        font-family: var(--font-sans);
+        font-size: 13px;
+        font-weight: 500;
+        transition: all 0.15s;
+    }
+    .btn-save:hover {
+        background: var(--accent-hover);
+        box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+    }
+    .btn-delete {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        background: transparent;
+        border: 1px solid rgba(244, 63, 94, 0.2);
+        color: var(--red);
+        padding: 8px 12px;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        font-family: var(--font-sans);
+        font-size: 12px;
+        transition: all 0.15s;
+    }
+    .btn-delete:hover {
+        background: rgba(244, 63, 94, 0.1);
+        border-color: rgba(244, 63, 94, 0.4);
     }
 
-    @keyframes fadeSlideIn {
-        from { opacity: 0; transform: translateY(-4px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
-
-    /* ═══ MODALS ═══ */
+    /* ═══ MODAL ═══ */
     .modal-backdrop {
         position: fixed;
         top: 0; left: 0;
@@ -1254,28 +1117,16 @@
         animation: fadeIn 0.15s ease;
     }
 
-    @keyframes fadeIn {
-        from { opacity: 0; }
-        to { opacity: 1; }
-    }
-
     .modal {
         background: var(--bg-elevated);
         border: 1px solid var(--border-active);
         border-radius: var(--radius-lg);
         width: 100%;
-        max-width: 420px;
+        max-width: 400px;
         padding: 24px;
         box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
         animation: modalSlide 0.2s ease;
     }
-
-    .detail-modal {
-        max-width: 460px;
-        max-height: 85vh;
-        overflow-y: auto;
-    }
-
     @keyframes modalSlide {
         from { opacity: 0; transform: translateY(12px) scale(0.97); }
         to { opacity: 1; transform: translateY(0) scale(1); }
@@ -1287,20 +1138,12 @@
         align-items: center;
         margin-bottom: 20px;
     }
-
     .modal-header h2 {
         font-family: var(--font-sans);
         font-size: 18px;
         font-weight: 600;
         color: var(--text-primary);
     }
-
-    .modal-header-actions {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-
     .modal-close {
         background: none;
         border: none;
@@ -1315,53 +1158,13 @@
         background: var(--bg-hover);
     }
 
-    .delete-btn {
-        background: none;
-        border: none;
-        color: var(--text-tertiary);
-        cursor: pointer;
-        padding: 4px;
-        border-radius: 4px;
-        transition: all 0.15s;
-    }
-    .delete-btn:hover {
-        color: var(--red);
-        background: rgba(244, 63, 94, 0.08);
-    }
-
-    /* ═══ FORM ═══ */
+    /* ═══ FORMS ═══ */
     .form-group {
         display: flex;
         flex-direction: column;
         gap: 6px;
         margin-bottom: 16px;
     }
-
-    .toggles {
-        flex-direction: row;
-        background: var(--bg-surface);
-        padding: 4px;
-        border-radius: var(--radius-md);
-        border: 1px solid var(--border);
-    }
-    .toggle-btn {
-        flex: 1;
-        padding: 8px;
-        background: transparent;
-        border: none;
-        color: var(--text-secondary);
-        border-radius: var(--radius-sm);
-        cursor: pointer;
-        font-family: var(--font-sans);
-        font-size: 13px;
-        transition: all 0.2s;
-    }
-    .toggle-btn.active {
-        background: var(--bg-elevated);
-        color: var(--text-primary);
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
-    }
-
     .form-group label {
         font-family: var(--font-sans);
         font-size: 12px;
@@ -1370,7 +1173,7 @@
     }
     .form-group .req { color: var(--red); }
 
-    input, select, textarea {
+    input, textarea {
         background: var(--bg-surface);
         border: 1px solid var(--border);
         color: var(--text-primary);
@@ -1386,65 +1189,35 @@
         resize: vertical;
         min-height: 60px;
     }
-    input:focus, select:focus, textarea:focus {
+    input:focus, textarea:focus {
         border-color: var(--accent);
     }
 
-    /* Priority selector */
-    .priority-selector {
+    /* Direction toggle */
+    .dir-toggle {
         display: flex;
         gap: 6px;
+        background: var(--bg-surface);
+        padding: 4px;
+        border-radius: var(--radius-md);
+        border: 1px solid var(--border);
     }
-    .prio-btn {
+    .dir-btn {
         flex: 1;
-        padding: 6px 0;
-        border: 1px solid var(--border);
-        border-radius: var(--radius-sm);
-        background: var(--bg-surface);
+        padding: 8px;
+        background: transparent;
+        border: none;
         color: var(--text-secondary);
-        font-family: var(--font-mono);
-        font-size: 11px;
+        border-radius: var(--radius-sm);
         cursor: pointer;
+        font-family: var(--font-sans);
+        font-size: 12px;
         transition: all 0.2s;
     }
-    .prio-btn.low.selected { background: rgba(52, 211, 153, 0.1); color: var(--green); border-color: rgba(52, 211, 153, 0.3); }
-    .prio-btn.med.selected { background: rgba(251, 191, 36, 0.1); color: var(--amber); border-color: rgba(251, 191, 36, 0.3); }
-    .prio-btn.high.selected { background: rgba(244, 63, 94, 0.1); color: var(--red); border-color: rgba(244, 63, 94, 0.3); }
-
-    /* Penalty selector */
-    .penalty-selector {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 6px;
-    }
-    .penalty-opt {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 2px;
-        padding: 6px 4px;
-        border: 1px solid var(--border);
-        border-radius: var(--radius-sm);
-        background: var(--bg-surface);
-        color: var(--text-secondary);
-        cursor: pointer;
-        transition: all 0.2s;
-    }
-    .penalty-opt.selected {
-        border-color: var(--accent);
-        background: var(--accent-dim);
+    .dir-btn.active {
+        background: var(--bg-elevated);
         color: var(--text-primary);
-    }
-    .penalty-num {
-        font-family: var(--font-mono);
-        font-size: 14px;
-        font-weight: 600;
-    }
-    .penalty-lbl {
-        font-family: var(--font-mono);
-        font-size: 8px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
     }
 
     .form-actions {
@@ -1453,7 +1226,6 @@
         gap: 10px;
         margin-top: 24px;
     }
-
     .btn-cancel {
         background: transparent;
         border: 1px solid var(--border);
@@ -1469,7 +1241,6 @@
         border-color: var(--border-active);
         background: var(--bg-hover);
     }
-
     .btn-submit {
         background: var(--accent);
         border: none;

@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Float
 from sqlalchemy.orm import declarative_base, relationship, backref
 
 Base = declarative_base()
@@ -21,6 +21,9 @@ class Task(Base):
     workspace_id = Column(Integer, ForeignKey('workspaces.id'), nullable=True)
     source = Column(String, default='manual')  # manual/android
     supabase_id = Column(String, nullable=True, unique=True)
+    pos_x = Column(Float, nullable=True, default=None)
+    pos_y = Column(Float, nullable=True, default=None)
+    session_queued = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     children = relationship('Task', backref=backref('parent', remote_side=[id]), lazy='dynamic')
