@@ -106,12 +106,12 @@
 
   .nav-item:hover {
     color: var(--text-secondary);
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--bg-elevated);
   }
 
   .nav-item.active {
     color: var(--text-primary);
-    background: rgba(255, 255, 255, 0.05);
+    background: var(--bg-hover);
   }
 
   .indicator {

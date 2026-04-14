@@ -248,7 +248,7 @@
     background: var(--bg-hover);
     border-color: var(--border-active);
     transform: translateY(-2px);
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
   }
 
   .metric {
@@ -608,7 +608,7 @@
 
   .bar-today {
     background: var(--accent);
-    box-shadow: 0 0 12px rgba(139, 92, 246, 0.2);
+    box-shadow: 0 0 12px var(--accent-glow);
   }
 
   .bar-day {

@@ -10,8 +10,15 @@
   onMount(() => {
     const tick = () => {
       const now = new Date();
-      currentTime = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      currentDate = now.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+      currentTime = now.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      currentDate = now.toLocaleDateString([], {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+      });
     };
     tick();
     const iv = setInterval(tick, 30000);
@@ -32,8 +39,8 @@
         <button
           class="ws-pill"
           class:active={$activeWorkspace === ws && $activePage === "workspace"}
-          on:click={() => setWorkspace(ws)}
-        >{ws}</button>
+          on:click={() => setWorkspace(ws)}>{ws}</button
+        >
       {/each}
       <button class="ws-pill ws-add">+</button>
     </div>
@@ -100,13 +107,13 @@
 
   .ws-pill:hover {
     color: var(--text-secondary);
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--bg-elevated);
   }
 
   .ws-pill.active {
     color: var(--accent);
     background: var(--accent-dim);
-    border-color: rgba(139, 92, 246, 0.12);
+    border-color: var(--border-active);
   }
 
   .ws-add {
@@ -164,8 +171,13 @@
   }
 
   @keyframes breathe {
-    0%, 100% { opacity: 0.3; }
-    50% { opacity: 1; }
+    0%,
+    100% {
+      opacity: 0.3;
+    }
+    50% {
+      opacity: 1;
+    }
   }
 
   .control-chip {
@@ -177,7 +189,7 @@
     border: 1px solid var(--border);
     border-radius: 50%;
     background: transparent;
-    color: var(--text-tertiary);
+    color: var(--green);
     cursor: pointer;
     transition: all 0.15s ease;
   }
@@ -185,6 +197,6 @@
   .control-chip:hover {
     color: var(--text-secondary);
     border-color: var(--border-active);
-    background: rgba(255, 255, 255, 0.02);
+    background: var(--bg-elevated);
   }
 </style>

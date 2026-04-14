@@ -1,21 +1,22 @@
 :root {
-  --bg-base: #09090b;
-  --bg-surface: #111113;
-  --bg-elevated: #19191d;
-  --bg-hover: #1e1e23;
-  --border: rgba(255, 255, 255, 0.04);
-  --border-active: rgba(255, 255, 255, 0.08);
-  --accent: #8b5cf6;
-  --accent-hover: #7c4dff;
-  --accent-dim: rgba(139, 92, 246, 0.08);
-  --accent-glow: rgba(139, 92, 246, 0.15);
-  --accent-secondary: #a78bfa;
-  --text-primary: #ededef;
-  --text-secondary: #63636e;
-  --text-tertiary: #3a3a42;
-  --green: #34d399;
-  --amber: #fbbf24;
-  --red: #f43f5e;
+  --bg-base: #0b0b0f;
+  --bg-surface: #121216;
+  --bg-elevated: #1a1a20;
+  --bg-hover: #202028;
+  --border: #1e1e26;
+  --border-active: #2c2c38;
+  --accent: #7c5df9;
+  --accent-hover: #7d5eff;
+  --accent-dim: #16122e;
+  --accent-glow: rgba(124, 93, 249, 0.14);
+  --accent-secondary: #a18cfd;
+  --text-primary: #ececf0;
+  --text-secondary: #76768a;
+  --text-tertiary: #44444f;
+  --green: #34cb8a;
+  --amber: #edad28;
+  --red: #ee4251;
+  --white: #ffffff;
   --font-sans: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
   --radius-sm: 6px;
@@ -23,9 +24,16 @@
   --radius-lg: 14px;
 }
 
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
 
-html, body {
+html,
+body {
   background: var(--bg-base);
   color: var(--text-primary);
   height: 100%;
@@ -42,7 +50,20 @@ html, body {
   color: var(--text-primary);
 }
 
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border-active); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-active);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+}

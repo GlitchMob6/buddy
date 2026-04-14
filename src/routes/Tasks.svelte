@@ -1,5 +1,6 @@
 <script>
     import { onMount, tick } from 'svelte';
+    import { fade } from 'svelte/transition';
     import { Plus, X, Trash2, Zap } from 'lucide-svelte';
 
     const API_BASE = 'http://localhost:8000';
@@ -7,6 +8,9 @@
     // ── STATE ──────────────────────────────────────────────────
     let nodes = [];
     let selectedId = null;
+    let visibleNodeIds = new Set();
+    let expandedIds = new Set();
+    let dragGroup = [];
     let panX = 0, panY = 0;
     let zoom = 1;
     let isPanning = false;
@@ -49,13 +53,39 @@
 
     // ── DERIVED ────────────────────────────────────────────────
     $: rootNodes = nodes.filter(n => n.parent_id === null);
-    $: childrenOf = (parentId) => nodes.filter(n => n.parent_id === parentId);
-    $: getNode = (id) => nodes.find(n => n.id === id);
+    // Concern 3: sort children by order_index so reorder is reflected everywhere
+    function childrenOf(parentId) {
+        return nodes
+            .filter(n => n.parent_id === parentId)
+            .sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
+    }
+    function getNode(id) {
+        return nodes.find(n => n.id === id);
+    }
+
+    $: visibleNodes = nodes.filter(n => visibleNodeIds.has(n.id));
 
     function cardHeight(node) {
-        const kids = childrenOf(node.id);
-        if (kids.length === 0) return CARD_MIN_H;
-        return HEADER_H + kids.length * CHILD_ROW_H + 8;
+        return CARD_MIN_H;
+    }
+
+    function recomputeVisibleNodes() {
+        let newVis = new Set();
+        nodes.filter(n => n.parent_id === null).forEach(n => newVis.add(n.id));
+
+        let changed = true;
+        while(changed) {
+            changed = false;
+            for (let n of nodes) {
+                if (n.parent_id !== null && newVis.has(n.parent_id) && expandedIds.has(n.parent_id)) {
+                    if (!newVis.has(n.id)) {
+                        newVis.add(n.id);
+                        changed = true;
+                    }
+                }
+            }
+        }
+        visibleNodeIds = newVis;
     }
 
     function nodeDirection(node) {
@@ -104,6 +134,7 @@
             const r = await fetch(`${API_BASE}/tasks/all`);
             if (!r.ok) throw new Error('fetch failed');
             nodes = await r.json();
+            recomputeVisibleNodes();
         } catch (e) {
             console.error('Failed to fetch nodes:', e);
             nodes = [];
@@ -120,6 +151,7 @@
             if (!r.ok) throw new Error('create failed');
             const created = await r.json();
             nodes = [...nodes, created];
+            recomputeVisibleNodes();
             return created;
         } catch (e) {
             console.error('Create failed:', e);
@@ -155,6 +187,7 @@
             nodes = nodes.filter(n => !toRemove.has(n.id));
             pinnedIds.delete(id);
             pinnedIds = new Set(pinnedIds);
+            recomputeVisibleNodes();
         } catch (e) {
             console.error('Delete failed:', e);
         }
@@ -189,6 +222,18 @@
             isPanning = true;
             panStart = { x: e.clientX - panX, y: e.clientY - panY };
             selectedId = null;
+            // Collapse all non-pinned expanded nodes
+            let keepExpanded = new Set();
+            for (let pid of pinnedIds) {
+                let curr = pid;
+                while (curr) {
+                    keepExpanded.add(curr);
+                    curr = getNode(curr)?.parent_id;
+                }
+                if (expandedIds.has(pid)) keepExpanded.add(pid);
+            }
+            expandedIds = keepExpanded;
+            recomputeVisibleNodes();
         }
     }
 
@@ -200,9 +245,13 @@
         if (dragNode) {
             const dx = (e.clientX - dragStart.x) / zoom;
             const dy = (e.clientY - dragStart.y) / zoom;
-            const newX = dragNodeStart.x + dx;
-            const newY = dragNodeStart.y + dy;
-            nodes = nodes.map(n => n.id === dragNode.id ? { ...n, pos_x: newX, pos_y: newY } : n);
+            nodes = nodes.map(n => {
+                const dg = dragGroup.find(d => d.node.id === n.id);
+                if (dg) {
+                    return { ...n, pos_x: dg.startX + dx, pos_y: dg.startY + dy };
+                }
+                return n;
+            });
         }
     }
 
@@ -211,22 +260,115 @@
             isPanning = false;
         }
         if (dragNode) {
-            const node = nodes.find(n => n.id === dragNode.id);
-            if (node) {
-                patchNode(node.id, { pos_x: node.pos_x, pos_y: node.pos_y });
+            const parentIdForReorder = dragNode.parent_id;
+            // Promise.all to save all elements in the drag group
+            Promise.all(dragGroup.map(dg => {
+                const node = nodes.find(n => n.id === dg.node.id);
+                return patchNode(node.id, { pos_x: node.pos_x, pos_y: node.pos_y });
+            }));
+            if (parentIdForReorder !== null) {
+                reorderSiblings(parentIdForReorder);
             }
             dragNode = null;
+            dragGroup = [];
         }
+    }
+
+    // ── SIBLING REORDER (Concern 3) ───────────────────────────
+    async function reorderSiblings(parentId) {
+        // Get all siblings (nodes with same parent_id)
+        const siblings = nodes
+            .filter(n => n.parent_id === parentId)
+            .sort((a, b) => (a.pos_y || 0) - (b.pos_y || 0));
+
+        if (siblings.length === 0) return;
+
+        // Assign new order_index based on sorted Y position
+        const updates = [];
+        siblings.forEach((sib, i) => {
+            if (sib.order_index !== i) {
+                updates.push({ id: sib.id, order_index: i });
+            }
+        });
+
+        if (updates.length === 0) return;
+
+        // Optimistic local update for immediate reactivity
+        nodes = nodes.map(n => {
+            const upd = updates.find(u => u.id === n.id);
+            return upd ? { ...n, order_index: upd.order_index } : n;
+        });
+
+        // Persist each sibling's new order_index via PATCH
+        await Promise.all(
+            updates.map(u => patchNode(u.id, { order_index: u.order_index }))
+        );
     }
 
     // ── NODE DRAG ──────────────────────────────────────────────
     function handleNodeMouseDown(e, node) {
         if (e.button !== 0) return;
         e.stopPropagation();
+
+        selectedId = node.id;
+
+        // Auto-collapse unpinned, keep ancestors and pinned visible
+        let keepExpanded = new Set();
+        let current = node.parent_id;
+        while (current) {
+            keepExpanded.add(current);
+            current = getNode(current)?.parent_id;
+        }
+        for (let pid of pinnedIds) {
+            let curr = pid;
+            while (curr) {
+                keepExpanded.add(curr);
+                curr = getNode(curr)?.parent_id;
+            }
+            if (expandedIds.has(pid)) keepExpanded.add(pid);
+        }
+        keepExpanded.add(node.id);
+        expandedIds = keepExpanded;
+
+        // Automatically configure target positions for unpositioned children
+        const kids = childrenOf(node.id);
+        const dir = nodeDirection(node);
+        let patched = false;
+        kids.forEach((child, i) => {
+            if ((!child.pos_x && !child.pos_y) || (child.pos_x === 0 && child.pos_y === 0)) {
+                if (dir === 'lr') {
+                    child.pos_x = (node.pos_x || 0) + 240;
+                    child.pos_y = (node.pos_y || 0) + i * 90;
+                } else {
+                    child.pos_x = node.pos_x || 0;
+                    child.pos_y = (node.pos_y || 0) + 120 + i * 90;
+                }
+                patchNode(child.id, {pos_x: child.pos_x, pos_y: child.pos_y});
+                patched = true;
+            }
+        });
+        if (patched) nodes = [...nodes];
+        recomputeVisibleNodes();
+
+        // Drag Setup: Move parent and all its currently visible descendants
+        function getVisibleDesc(id) {
+            let desc = [];
+            let c = nodes.filter(n => n.parent_id === id && visibleNodeIds.has(n.id));
+            for (let x of c) {
+                desc.push(x);
+                desc = desc.concat(getVisibleDesc(x.id));
+            }
+            return desc;
+        }
+        let draggedNodes = [node, ...getVisibleDesc(node.id)];
+        dragGroup = draggedNodes.map(n => ({
+            node: n,
+            startX: n.pos_x || 0,
+            startY: n.pos_y || 0
+        }));
+
         dragNode = node;
         dragStart = { x: e.clientX, y: e.clientY };
-        dragNodeStart = { x: node.pos_x || 0, y: node.pos_y || 0 };
-        selectedId = node.id;
     }
 
     // ── CONTEXT MENU ───────────────────────────────────────────
@@ -360,10 +502,10 @@
         let px, py;
         if (dir === 'lr') {
             px = (parentNode.pos_x || 0) + 240;
-            py = (parentNode.pos_y || 0) + siblings.length * 110;
+            py = (parentNode.pos_y || 0) + siblings.length * 90;
         } else {
-            px = (parentNode.pos_x || 0) + siblings.length * 220;
-            py = (parentNode.pos_y || 0) + 120 + siblings.length * 0;
+            px = parentNode.pos_x || 0;
+            py = (parentNode.pos_y || 0) + 120 + siblings.length * 90;
         }
 
         const created = await createNode({
@@ -385,11 +527,11 @@
         for (const node of nodeList) {
             if (node.parent_id === null) continue;
             const parent = getNode(node.parent_id);
-            if (!parent) continue;
+            if (!parent || !visibleNodeIds.has(parent.id)) continue;
 
             const dir = nodeDirection(node);
-            const pH = cardHeight(parent);
-            const cH = cardHeight(node);
+            const pH = CARD_MIN_H;
+            const cH = CARD_MIN_H;
 
             let d;
             if (dir === 'lr') {
@@ -397,7 +539,7 @@
                 const y1 = (parent.pos_y || 0) + pH / 2;
                 const x2 = node.pos_x || 0;
                 const y2 = (node.pos_y || 0) + cH / 2;
-                const cp = 60;
+                const cp = 50;
                 d = `M ${x1} ${y1} C ${x1 + cp} ${y1} ${x2 - cp} ${y2} ${x2} ${y2}`;
             } else {
                 const x1 = (parent.pos_x || 0) + CARD_W / 2;
@@ -413,7 +555,7 @@
         return arrows;
     }
 
-    $: arrows = getArrows(nodes);
+    $: arrows = getArrows(visibleNodes);
 
     // ── HELPERS ────────────────────────────────────────────────
     function formatDate(dateString) {
@@ -474,19 +616,21 @@
                 {/each}
 
                 <!-- Nodes -->
-                {#each nodes as node (node.id)}
+                {#each visibleNodes as node (node.id)}
                     {@const kids = childrenOf(node.id)}
                     {@const h = cardHeight(node)}
                     {@const isSelected = selectedId === node.id}
                     {@const isPinned = pinnedIds.has(node.id)}
                     {@const isHovered = hoveredNodeId === node.id}
                     {@const dir = nodeDirection(node)}
+                    {@const isExpanded = expandedIds.has(node.id)}
                     <foreignObject
                         x={node.pos_x || 0}
                         y={node.pos_y || 0}
                         width={CARD_W}
-                        height={h + 40}
+                        height={CARD_MIN_H + 40}
                         style="overflow: visible;"
+                        in:fade={{ duration: 250 }}
                     >
                         <!-- svelte-ignore a11y-no-static-element-interactions -->
                         <div
@@ -522,30 +666,8 @@
                                 </button>
                             </div>
 
-                            <!-- Children list -->
-                            {#if kids.length > 0}
-                                <div class="children-divider"></div>
-                                <div class="children-list">
-                                    {#each kids as child (child.id)}
-                                        <div class="child-row">
-                                            <button class="done-ring small" class:checked={child.status === 'done'} on:mousedown|stopPropagation on:click={(e) => toggleDone(e, child.id)}>
-                                                {#if child.status === 'done'}
-                                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                                {/if}
-                                            </button>
-                                            <span class="child-title" class:strikethrough={child.status === 'done'}>{child.title || 'Untitled'}</span>
-                                            <button class="session-square small" class:queued={child.session_queued} on:mousedown|stopPropagation on:click={(e) => toggleSession(e, child.id)}>
-                                                {#if child.session_queued}
-                                                    <Zap size={8} />
-                                                {/if}
-                                            </button>
-                                        </div>
-                                    {/each}
-                                </div>
-                            {/if}
-
-                            <!-- Add child button on hover -->
-                            {#if isHovered}
+                            <!-- Add child button on hover if expanded or has no kids yet -->
+                            {#if isHovered && (kids.length === 0 || isExpanded)}
                                 <button
                                     class="add-child-btn"
                                     class:bottom={dir === 'tb'}
@@ -712,7 +834,7 @@
         align-items: center;
         gap: 6px;
         background: var(--accent);
-        color: #fff;
+        color: var(--white);
         border: none;
         padding: 8px 16px;
         border-radius: var(--radius-sm);
@@ -725,7 +847,7 @@
     .new-roadmap-btn:hover {
         background: var(--accent-hover);
         transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+        box-shadow: 0 4px 12px var(--accent-glow);
     }
 
     /* ═══ CANVAS ═══ */
@@ -767,7 +889,7 @@
     }
     .node-card.selected {
         transform: scale(1.06);
-        box-shadow: 0 8px 32px rgba(109, 93, 252, 0.18);
+        box-shadow: 0 8px 32px var(--accent-glow);
         z-index: 10;
     }
     .node-card.pinned {
@@ -824,19 +946,11 @@
     .done-ring.checked {
         background: var(--green);
         border-color: var(--green);
-        color: #fff;
+        color: var(--white);
     }
     .done-ring svg {
         width: 10px;
         height: 10px;
-    }
-    .done-ring.small {
-        width: 14px;
-        height: 14px;
-    }
-    .done-ring.small svg {
-        width: 8px;
-        height: 8px;
     }
 
     /* ═══ SESSION SQUARE CHECKBOX ═══ */
@@ -861,43 +975,7 @@
     .session-square.queued {
         background: var(--accent);
         border-color: var(--accent);
-        color: #fff;
-    }
-    .session-square.small {
-        width: 14px;
-        height: 14px;
-    }
-
-    /* ═══ CHILDREN DIVIDER & LIST ═══ */
-    .children-divider {
-        height: 1px;
-        background: var(--border);
-        margin: 0 10px;
-    }
-
-    .children-list {
-        padding: 4px 10px 6px;
-    }
-
-    .child-row {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        height: 28px;
-    }
-
-    .child-title {
-        flex: 1;
-        font-size: 11px;
-        color: var(--text-secondary);
-        text-align: center;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-    .child-title.strikethrough {
-        text-decoration: line-through;
-        color: var(--text-tertiary);
+        color: var(--white);
     }
 
     /* ═══ ADD CHILD BUTTON ═══ */
@@ -911,11 +989,11 @@
         border-radius: 50%;
         background: var(--accent);
         border: none;
-        color: #fff;
+        color: var(--white);
         cursor: pointer;
         transition: all 0.2s ease;
         z-index: 20;
-        box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
+        box-shadow: 0 2px 8px var(--accent-glow);
         animation: fadeIn 0.15s ease;
     }
     .add-child-btn.bottom {
@@ -930,7 +1008,7 @@
     }
     .add-child-btn:hover {
         transform: translateX(-50%) scale(1.15);
-        box-shadow: 0 4px 12px rgba(139, 92, 246, 0.5);
+        box-shadow: 0 4px 12px var(--accent-glow);
     }
     .add-child-btn.right-side:hover {
         transform: translateY(-50%) scale(1.15);
@@ -980,7 +1058,7 @@
         border: 1px solid var(--border);
         border-radius: 8px;
         padding: 4px;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
         animation: ctxScaleIn 0.12s ease;
         min-width: 120px;
     }
@@ -1008,7 +1086,7 @@
         background: var(--bg-surface);
     }
     .ctx-item.danger:hover {
-        background: rgba(244, 63, 94, 0.1);
+        background: color-mix(in srgb, var(--red) 10%, transparent);
         color: var(--red);
     }
 
@@ -1071,7 +1149,7 @@
         flex: 1;
         background: var(--accent);
         border: none;
-        color: #fff;
+        color: var(--white);
         padding: 8px 16px;
         border-radius: var(--radius-sm);
         cursor: pointer;
@@ -1082,14 +1160,14 @@
     }
     .btn-save:hover {
         background: var(--accent-hover);
-        box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+        box-shadow: 0 4px 12px var(--accent-glow);
     }
     .btn-delete {
         display: inline-flex;
         align-items: center;
         gap: 4px;
         background: transparent;
-        border: 1px solid rgba(244, 63, 94, 0.2);
+        border: 1px solid color-mix(in srgb, var(--red) 20%, transparent);
         color: var(--red);
         padding: 8px 12px;
         border-radius: var(--radius-sm);
@@ -1099,8 +1177,8 @@
         transition: all 0.15s;
     }
     .btn-delete:hover {
-        background: rgba(244, 63, 94, 0.1);
-        border-color: rgba(244, 63, 94, 0.4);
+        background: color-mix(in srgb, var(--red) 10%, transparent);
+        border-color: color-mix(in srgb, var(--red) 40%, transparent);
     }
 
     /* ═══ MODAL ═══ */
@@ -1108,7 +1186,7 @@
         position: fixed;
         top: 0; left: 0;
         width: 100vw; height: 100vh;
-        background: rgba(0, 0, 0, 0.55);
+        background: rgba(0, 0, 0, 0.5);
         backdrop-filter: blur(6px);
         display: flex;
         align-items: center;
@@ -1124,7 +1202,7 @@
         width: 100%;
         max-width: 400px;
         padding: 24px;
-        box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
+        box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
         animation: modalSlide 0.2s ease;
     }
     @keyframes modalSlide {
@@ -1244,7 +1322,7 @@
     .btn-submit {
         background: var(--accent);
         border: none;
-        color: #fff;
+        color: var(--white);
         padding: 8px 20px;
         border-radius: var(--radius-sm);
         cursor: pointer;
@@ -1255,6 +1333,6 @@
     }
     .btn-submit:hover {
         background: var(--accent-hover);
-        box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+        box-shadow: 0 4px 12px var(--accent-glow);
     }
 </style>
