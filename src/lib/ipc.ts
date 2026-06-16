@@ -12,14 +12,18 @@ import type {
   CreateTaskPayload,
   RegisterResourcePayload,
   Resource,
+  ScannedResource,
   Session,
   SessionTask,
   SubtaskSuggestion,
   Task,
+  UpdateResourceCategoryPayload,
+  UpdateResourceRolePayload,
   UpdateTaskPayload,
   UserModel,
   Violation,
   Workspace,
+  DiscoveredApp,
 } from '../types';
 
 // ── Tasks ──────────────────────────────────────────────────────────────────────
@@ -38,6 +42,9 @@ export const updateTask = (payload: UpdateTaskPayload): Promise<Task> =>
 
 export const deleteTask = (id: string): Promise<void> =>
   invoke('delete_task', { id });
+
+export const reorderTasks = (parentId: string, taskIds: string[]): Promise<void> =>
+  invoke('reorder_tasks', { parentId, taskIds });
 
 // ── Sessions ───────────────────────────────────────────────────────────────────
 
@@ -88,7 +95,7 @@ export const getSessionTasks = (sessionId: string): Promise<SessionTask[]> =>
 
 // ── Resources ──────────────────────────────────────────────────────────────────
 
-export const scanResources = (): Promise<Resource[]> =>
+export const scanResources = (): Promise<ScannedResource[]> =>
   invoke('scan_resources');
 
 export const registerResource = (payload: RegisterResourcePayload): Promise<Resource> =>
@@ -100,6 +107,9 @@ export const deleteResource = (id: string): Promise<void> =>
 export const getResources = (categoryFilter?: string): Promise<Resource[]> =>
   invoke('get_resources', { categoryFilter: categoryFilter ?? null });
 
+export const updateResourceCategory = (payload: UpdateResourceCategoryPayload): Promise<Resource> =>
+  invoke('update_resource_category', { payload });
+
 export const assignResourceToTask = (taskId: string, resourceId: string): Promise<void> =>
   invoke('assign_resource_to_task', { taskId, resourceId });
 
@@ -108,6 +118,12 @@ export const unassignResourceFromTask = (taskId: string, resourceId: string): Pr
 
 export const getTaskResources = (taskId: string): Promise<Resource[]> =>
   invoke('get_task_resources', { taskId });
+
+export const discoverApps = (): Promise<DiscoveredApp[]> =>
+  invoke('discover_apps');
+
+export const updateResourceRole = (payload: UpdateResourceRolePayload): Promise<Resource> =>
+  invoke('update_resource_role', { payload });
 
 // ── Monitoring ─────────────────────────────────────────────────────────────────
 

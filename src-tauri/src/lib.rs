@@ -10,6 +10,7 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // Open (or create) the SQLite DB and run all migrations
@@ -25,6 +26,7 @@ pub fn run() {
             commands::task_commands::get_task,
             commands::task_commands::update_task,
             commands::task_commands::delete_task,
+            commands::task_commands::reorder_tasks,
             // ── Session commands (pseudo + stubs) ──────────────────────
             commands::session_commands::create_session,
             commands::session_commands::start_session,
@@ -44,9 +46,12 @@ pub fn run() {
             commands::resource_commands::register_resource,
             commands::resource_commands::delete_resource,
             commands::resource_commands::get_resources,
+            commands::resource_commands::update_resource_category,
             commands::resource_commands::assign_resource_to_task,
             commands::resource_commands::unassign_resource_from_task,
             commands::resource_commands::get_task_resources,
+            commands::resource_commands::discover_apps,
+            commands::resource_commands::update_resource_role,
             // ── Monitoring commands (stubs) ────────────────────────────
             commands::monitoring_commands::start_monitoring,
             commands::monitoring_commands::stop_monitoring,

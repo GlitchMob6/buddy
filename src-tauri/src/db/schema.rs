@@ -49,9 +49,13 @@ CREATE TABLE IF NOT EXISTS workspaces (
 CREATE TABLE IF NOT EXISTS registered_resources (
     id TEXT PRIMARY KEY,
     resource_type TEXT NOT NULL
-        CHECK(resource_type IN ('APPLICATION','FOLDER','DOMAIN','URL')),
+        CHECK(resource_type IN ('APPLICATION')),
     resource_value TEXT NOT NULL,
+    display_name TEXT,
     category TEXT DEFAULT 'Other',
+    icon_data TEXT,
+    app_role TEXT NOT NULL DEFAULT 'work_tool'
+        CHECK(app_role IN ('work_tool','background','on_demand')),
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -146,3 +150,18 @@ CREATE TABLE IF NOT EXISTS settings (
 -- Seed user_model row (single-row table)
 INSERT OR IGNORE INTO user_model (id) VALUES (1);
 "#;
+
+/// Incremental migrations that add columns not present in the original schema.
+/// Each statement is idempotent — safe to run multiple times.
+/// SQLite doesn't support IF NOT EXISTS for ALTER TABLE, so we catch errors.
+pub const MIGRATIONS: &[&str] = &[
+    "ALTER TABLE registered_resources ADD COLUMN display_name TEXT",
+    "ALTER TABLE registered_resources ADD COLUMN icon_data TEXT",
+    "ALTER TABLE registered_resources ADD COLUMN app_role TEXT NOT NULL DEFAULT 'work_tool'",
+    "ALTER TABLE tasks ADD COLUMN parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE",
+    "ALTER TABLE tasks ADD COLUMN pos_x REAL",
+    "ALTER TABLE tasks ADD COLUMN pos_y REAL",
+    "ALTER TABLE tasks ADD COLUMN layout_direction TEXT DEFAULT 'tb'",
+    "ALTER TABLE tasks ADD COLUMN order_index INTEGER DEFAULT 0",
+    "ALTER TABLE tasks ADD COLUMN session_queued INTEGER DEFAULT 0",
+];

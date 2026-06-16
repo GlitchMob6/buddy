@@ -34,3 +34,9 @@ pub fn delete_task(id: String, db: State<DbConnection>) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     svc::delete(&conn, &id)
 }
+
+#[tauri::command]
+pub fn reorder_tasks(parent_id: String, task_ids: Vec<String>, db: State<DbConnection>) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    svc::reorder_tasks(&conn, &parent_id, task_ids)
+}

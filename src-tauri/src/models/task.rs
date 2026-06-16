@@ -44,6 +44,11 @@ pub struct Task {
     pub estimated_minutes: i32,
     pub created_at: String,
     pub updated_at: String,
+    pub pos_x: Option<f64>,
+    pub pos_y: Option<f64>,
+    pub layout_direction: Option<String>,
+    pub order_index: i32,
+    pub session_queued: bool,
 }
 
 /// Fields accepted when creating a new task. All optional except title.
@@ -55,6 +60,11 @@ pub struct CreateTaskPayload {
     pub priority: Option<i32>,
     pub deadline: Option<String>,
     pub estimated_minutes: Option<i32>,
+    pub pos_x: Option<f64>,
+    pub pos_y: Option<f64>,
+    pub layout_direction: Option<String>,
+    pub order_index: Option<i32>,
+    pub session_queued: Option<bool>,
 }
 
 /// Fields accepted when updating a task. All optional.
@@ -68,4 +78,9 @@ pub struct UpdateTaskPayload {
     pub status: Option<String>,
     pub deadline: Option<String>,
     pub estimated_minutes: Option<i32>,
+    pub pos_x: Option<f64>,
+    pub pos_y: Option<f64>,
+    pub layout_direction: Option<String>,
+    pub order_index: Option<i32>,
+    pub session_queued: Option<bool>,
 }

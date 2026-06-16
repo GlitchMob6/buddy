@@ -4,7 +4,19 @@ export type TaskStatus = 'todo' | 'in_progress' | 'completed' | 'archived';
 
 export type SessionStatus = 'planned' | 'active' | 'paused' | 'completed' | 'abandoned';
 
-export type ResourceType = 'APPLICATION' | 'FOLDER' | 'DOMAIN' | 'URL';
+export type ResourceType = 'APPLICATION';
+
+export type AppRole = 'work_tool' | 'background' | 'on_demand';
+
+export type ResourceCategory =
+  | 'Browser'
+  | 'Code'
+  | 'Terminal'
+  | 'Communication'
+  | 'Media'
+  | 'Design'
+  | 'Productivity'
+  | 'Other';
 
 export type ViolationSeverity = 'low' | 'medium' | 'high';
 
@@ -25,6 +37,12 @@ export interface Task {
   estimated_minutes: number;
   created_at: string;
   updated_at: string;
+  // ── Canvas fields ──
+  pos_x: number | null;
+  pos_y: number | null;
+  layout_direction: string | null;
+  order_index: number;
+  session_queued: boolean;
 }
 
 export interface Session {
@@ -57,8 +75,30 @@ export interface Resource {
   id: string;
   resource_type: ResourceType;
   resource_value: string;
+  /** Human-readable name (e.g., "Google Chrome" instead of exe path) */
+  display_name: string | null;
   category: string;
+  /** Base64-encoded PNG icon data */
+  icon_data: string | null;
+  app_role: AppRole;
   created_at: string;
+}
+
+/** Detected by OS scan — not yet persisted */
+export interface ScannedResource {
+  display_name: string;
+  exe_path: string;
+  category: string;
+  icon_data: string | null;
+}
+
+export interface DiscoveredApp {
+  display_name: string;
+  exe_path: string;
+  category: string;
+  icon_data: string | null;
+  suggested_role: AppRole;
+  discovery_reason: string;
 }
 
 export interface MonitoringEvent {
@@ -177,6 +217,12 @@ export interface CreateTaskPayload {
   priority?: number;
   deadline?: string;
   estimated_minutes?: number;
+  // ── Canvas fields ──
+  pos_x?: number;
+  pos_y?: number;
+  layout_direction?: 'tb' | 'lr';
+  order_index?: number;
+  session_queued?: boolean;
 }
 
 export interface UpdateTaskPayload {
@@ -188,6 +234,12 @@ export interface UpdateTaskPayload {
   status?: TaskStatus;
   deadline?: string;
   estimated_minutes?: number;
+  // ── Canvas fields ──
+  pos_x?: number;
+  pos_y?: number;
+  layout_direction?: 'tb' | 'lr';
+  order_index?: number;
+  session_queued?: boolean;
 }
 
 export interface CreateSessionPayload {
@@ -195,7 +247,19 @@ export interface CreateSessionPayload {
 }
 
 export interface RegisterResourcePayload {
-  resource_type: ResourceType;
   resource_value: string;
+  display_name?: string;
   category?: string;
+  app_role?: AppRole;
+  icon_data?: string;
+}
+
+export interface UpdateResourceCategoryPayload {
+  id: string;
+  category: string;
+}
+
+export interface UpdateResourceRolePayload {
+  id: string;
+  app_role: AppRole;
 }

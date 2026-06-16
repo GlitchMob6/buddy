@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import './index.css';
 import { useSession } from './hooks/useSession';
 import type { Session } from './types';
+import ResourceRegistry from './components/resource-registry/ResourceRegistry';
+import TaskCanvas from './components/task-canvas/TaskCanvas';
 
 // ── Nav items ──────────────────────────────────────────────────────────────────
 
@@ -21,17 +23,14 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { id: 'canvas',     label: 'Task Canvas',  icon: '⬡', section: 'work' },
-  { id: 'sessions',   label: 'Sessions',     icon: '◷', section: 'work' },
-  { id: 'resources',  label: 'Resources',    icon: '⊞', section: 'work' },
-  { id: 'workspace',  label: 'Workspace',    icon: '▣', section: 'observe' },
-  { id: 'monitoring', label: 'Monitoring',   icon: '◉', section: 'observe' },
-  { id: 'dashboard',  label: 'Dashboard',    icon: '◈', section: 'insight' },
+  { id: 'canvas', label: 'Task Canvas', icon: '⬡', section: 'work' },
+  { id: 'sessions', label: 'Sessions', icon: '◷', section: 'work' },
+  { id: 'resources', label: 'Resources', icon: '⊞', section: 'work' },
+  { id: 'dashboard', label: 'Dashboard', icon: '◈', section: 'insight' },
 ];
 
 const SECTIONS: { id: NavItem['section']; label: string }[] = [
-  { id: 'work',    label: 'Work' },
-  { id: 'observe', label: 'Observe' },
+  { id: 'work', label: 'Work' },
   { id: 'insight', label: 'Insight' },
 ];
 
@@ -39,9 +38,9 @@ const SECTIONS: { id: NavItem['section']; label: string }[] = [
 
 function SessionStatusBadge({ status }: { status: Session['status'] }) {
   const map: Record<string, string> = {
-    planned:   'badge-todo',
-    active:    'badge-in-progress',
-    paused:    'badge-todo',
+    planned: 'badge-todo',
+    active: 'badge-in-progress',
+    paused: 'badge-todo',
     completed: 'badge-completed',
     abandoned: 'badge-archived',
   };
@@ -220,20 +219,20 @@ function SessionsPage() {
 function PlaceholderPage({ page }: { page: Page }) {
   const item = NAV_ITEMS.find(n => n.id === page)!;
   const descriptions: Record<Page, string> = {
-    canvas:     'Your infinite task tree — create, connect, and manage work visually.',
-    sessions:   '',
-    resources:  'Manage apps, folders, and URLs tied to your work.',
-    workspace:  'Your immersive environment during an active session.',
-    monitoring: 'Live activity feed and violation tracking during sessions.',
-    dashboard:  "Buddy's model of how you work — focus score, patterns, insights.",
+    canvas: 'Your infinite task tree — create, connect, and manage work visually.',
+    sessions: '',
+    resources: 'Manage apps, folders, and URLs tied to your work.',
+    dashboard: "Buddy's model of how you work — focus score, patterns, insights.",
+    workspace: 'Manage your current workspace.',
+    monitoring: 'View system and process monitoring.',
   };
   const ownerTag: Record<Page, string> = {
-    canvas:     'Dev A · Module A1',
-    sessions:   'Dev B · Module B1',
-    resources:  'Dev A · Module A2',
-    workspace:  'Dev A · Module A4',
+    canvas: 'Dev A · Module A1',
+    sessions: 'Dev B · Module B1',
+    resources: 'Dev A · Module A2',
+    workspace: 'Dev A · Module A4',
     monitoring: 'Dev A · Module A3',
-    dashboard:  'Dev B · Module B3',
+    dashboard: 'Dev B · Module B3',
   };
 
   return (
@@ -293,6 +292,8 @@ export default function App() {
 
   const renderPage = () => {
     if (activePage === 'sessions') return <SessionsPage />;
+    if (activePage === 'resources') return <ResourceRegistry />;
+    if (activePage === 'canvas') return <TaskCanvas />;
     return <PlaceholderPage page={activePage} />;
   };
 
@@ -333,6 +334,7 @@ export default function App() {
             </div>
             <div className="page-subtitle">
               {activePage === 'sessions' && 'Phase 0 · Pseudo session system — live'}
+              {activePage === 'resources' && 'Module A2 · Manage apps, folders, domains, and URLs'}
             </div>
           </div>
         </div>

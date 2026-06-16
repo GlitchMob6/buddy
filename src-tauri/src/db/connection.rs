@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::Manager;
 
-use crate::db::schema::SCHEMA_SQL;
+use crate::db::schema::{SCHEMA_SQL, MIGRATIONS};
 
 /// Global SQLite connection wrapped in a Mutex for Tauri state.
 pub struct DbConnection(pub Mutex<Connection>);
@@ -19,10 +19,15 @@ pub fn db_path(app_handle: &tauri::AppHandle) -> PathBuf {
     data_dir.join("buddy.db")
 }
 
-/// Opens (or creates) the SQLite database and runs the full schema.
+/// Opens (or creates) the SQLite database, runs the full schema,
+/// then applies incremental migrations (idempotent).
 pub fn open(path: &PathBuf) -> Result<Connection> {
     let conn = Connection::open(path)?;
     // Run all CREATE TABLE statements
     conn.execute_batch(SCHEMA_SQL)?;
+    // Run incremental migrations — ignore "duplicate column" errors
+    for migration in MIGRATIONS {
+        let _ = conn.execute(migration, []);
+    }
     Ok(conn)
 }
