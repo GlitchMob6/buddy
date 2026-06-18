@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import type React from 'react';
 import {
   ReactFlow,
   Controls,
-  Background,
   MiniMap,
   useNodesState,
   useEdgesState,
@@ -10,7 +10,6 @@ import {
   Edge,
   Node,
   ReactFlowProvider,
-  BackgroundVariant
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 

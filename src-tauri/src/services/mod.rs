@@ -12,4 +12,5 @@ pub mod monitoring_service;
 pub mod workspace_service;
 pub mod user_model_service;
 pub mod ai_service;
+pub mod boss_key_service;
 

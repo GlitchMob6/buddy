@@ -159,6 +159,12 @@ export const destroyWorkspace = (workspaceId: string): Promise<void> =>
 export const launchResource = (resourceId: string): Promise<void> =>
   invoke('launch_resource', { resourceId });
 
+export const enterWorkspace = (): Promise<void> =>
+  invoke('enter_workspace');
+
+export const exitWorkspace = (): Promise<void> =>
+  invoke('exit_workspace');
+
 // ── User Model ─────────────────────────────────────────────────────────────────
 
 export const getUserModel = (): Promise<UserModel> =>

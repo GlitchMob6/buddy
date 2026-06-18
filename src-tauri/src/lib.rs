@@ -12,6 +12,27 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_shortcuts(["ctrl+shift+x"])
+                .unwrap()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        let db = app.state::<DbConnection>();
+                        let conn = db.0.lock().unwrap();
+                        // Look up the active session for proper boss key logging
+                        let session_id: String = conn.query_row(
+                            "SELECT id FROM sessions WHERE status = 'active' LIMIT 1",
+                            [],
+                            |row| row.get(0),
+                        ).unwrap_or_else(|_| "no-session".to_string());
+                        let _ = crate::services::boss_key_service::use_boss_key(&conn, &session_id, "Other");
+                        drop(conn);
+                        let _ = crate::services::workspace_service::exit_workspace(app);
+                    }
+                })
+                .build(),
+        )
         .setup(|app| {
             // Open (or create) the SQLite DB and run all migrations
             let path = db_path(app.handle());
@@ -64,6 +85,11 @@ pub fn run() {
             commands::workspace_commands::switch_workspace,
             commands::workspace_commands::destroy_workspace,
             commands::workspace_commands::launch_resource,
+            commands::workspace_commands::enter_workspace,
+            commands::workspace_commands::exit_workspace,
+            // ── Boss Key commands ──────────────────────────────────────
+            commands::boss_key_commands::use_boss_key,
+            commands::boss_key_commands::get_boss_key_usage,
             // ── User Model commands ────────────────────────────────────
             commands::user_model_commands::get_user_model,
             commands::user_model_commands::recompute_user_model,

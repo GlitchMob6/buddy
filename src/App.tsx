@@ -4,6 +4,7 @@ import { useSession } from './hooks/useSession';
 import type { Session } from './types';
 import ResourceRegistry from './components/resource-registry/ResourceRegistry';
 import TaskCanvas from './components/task-canvas/TaskCanvas';
+import WorkspaceOverlay from './components/workspace/WorkspaceOverlay';
 
 // ── Nav items ──────────────────────────────────────────────────────────────────
 
@@ -49,7 +50,7 @@ function SessionStatusBadge({ status }: { status: Session['status'] }) {
 
 // ── Sessions page (live pseudo session test) ───────────────────────────────────
 
-function SessionsPage() {
+function SessionsPage({ onStart }: { onStart: () => void }) {
   const { activeSession, sessions, loading, error, create, start, pause, resume, complete, abandon } = useSession();
   const [newName, setNewName] = useState('');
 
@@ -160,6 +161,7 @@ function SessionsPage() {
                 const s = await create(newName || undefined);
                 setNewName('');
                 await start(s.id);
+                onStart();
               }}
             >
               {loading ? '…' : '▶ Start Session'}
@@ -198,7 +200,7 @@ function SessionsPage() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   {s.status === 'planned' && (
                     <button className="btn btn-secondary btn-sm" disabled={loading}
-                      onClick={() => start(s.id)}>
+                      onClick={async () => { await start(s.id); onStart(); }}>
                       ▶ Start
                     </button>
                   )}
@@ -291,9 +293,10 @@ export default function App() {
   const [activePage, setActivePage] = useState<Page>('sessions');
 
   const renderPage = () => {
-    if (activePage === 'sessions') return <SessionsPage />;
+    if (activePage === 'sessions') return <SessionsPage onStart={() => setActivePage('workspace')} />;
     if (activePage === 'resources') return <ResourceRegistry />;
     if (activePage === 'canvas') return <TaskCanvas />;
+    if (activePage === 'workspace') return <WorkspaceOverlay />;
     return <PlaceholderPage page={activePage} />;
   };
 
