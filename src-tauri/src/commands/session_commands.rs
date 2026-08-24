@@ -1,17 +1,22 @@
 /// Session IPC commands — thin adapters over session_service.
 ///
-/// These command signatures are STABLE — same in Phase 0 pseudo and Module B1 real.
-/// Dev B replaces session_service internals without touching this file.
+/// Module B1a: all stubs are now wired to real service implementations.
+/// Blueprint generation is exposed as a new command.
 
 use tauri::State;
 use crate::db::connection::DbConnection;
-use crate::models::session::{CreateSessionPayload, Session};
+use crate::models::session::{CreateSessionPayload, Session, SessionTask, BlueprintResponse};
 use crate::services::session_service as svc;
 
 #[tauri::command]
 pub fn create_session(payload: CreateSessionPayload, db: State<DbConnection>) -> Result<Session, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    svc::create(&conn, payload.name)
+    svc::create(
+        &conn,
+        payload.name,
+        payload.task_ids,
+        payload.allocated_minutes,
+    )
 }
 
 #[tauri::command]
@@ -56,29 +61,46 @@ pub fn get_sessions(status_filter: Option<String>, db: State<DbConnection>) -> R
     svc::list(&conn, status_filter)
 }
 
-// ── Stubs (Dev B fills in Module B1) ─────────────────────────────────────────
+// ── Session Tasks CRUD (now real) ────────────────────────────────────────────
 
 #[tauri::command]
-pub fn add_session_task(_session_id: String, _task_id: String, _allocated_minutes: i32, _db: State<DbConnection>) -> Result<(), String> {
-    Ok(())
+pub fn add_session_task(session_id: String, task_id: String, allocated_minutes: i32, db: State<DbConnection>) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    svc::add_session_task(&conn, &session_id, &task_id, allocated_minutes)
 }
 
 #[tauri::command]
-pub fn remove_session_task(_session_id: String, _task_id: String, _db: State<DbConnection>) -> Result<(), String> {
-    Ok(())
+pub fn remove_session_task(session_id: String, task_id: String, db: State<DbConnection>) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    svc::remove_session_task(&conn, &session_id, &task_id)
 }
 
 #[tauri::command]
-pub fn reorder_session_tasks(_session_id: String, _task_ids: Vec<String>, _db: State<DbConnection>) -> Result<(), String> {
-    Ok(())
+pub fn reorder_session_tasks(session_id: String, task_ids: Vec<String>, db: State<DbConnection>) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    svc::reorder_session_tasks(&conn, &session_id, task_ids)
 }
 
 #[tauri::command]
-pub fn update_task_allocation(_session_id: String, _task_id: String, _new_minutes: i32, _db: State<DbConnection>) -> Result<(), String> {
-    Ok(())
+pub fn update_task_allocation(session_id: String, task_id: String, new_minutes: i32, db: State<DbConnection>) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    svc::update_task_allocation(&conn, &session_id, &task_id, new_minutes)
 }
 
 #[tauri::command]
-pub fn get_session_tasks(_session_id: String, _db: State<DbConnection>) -> Result<Vec<crate::models::session::SessionTask>, String> {
-    Ok(vec![])
+pub fn get_session_tasks(session_id: String, db: State<DbConnection>) -> Result<Vec<SessionTask>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    svc::get_session_tasks(&conn, &session_id)
+}
+
+// ── Blueprint generation (new) ───────────────────────────────────────────────
+
+#[tauri::command]
+pub fn generate_session_blueprint(
+    task_ids: Vec<String>,
+    total_minutes: i32,
+    db: State<DbConnection>,
+) -> Result<BlueprintResponse, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    svc::generate_blueprint(&conn, task_ids, total_minutes)
 }

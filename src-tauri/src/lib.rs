@@ -27,6 +27,17 @@ pub fn run() {
                             |row| row.get(0),
                         ).unwrap_or_else(|_| "no-session".to_string());
                         let _ = crate::services::boss_key_service::use_boss_key(&conn, &session_id, "Other");
+                        
+                        if session_id != "no-session" {
+                            let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+                            let _ = conn.execute(
+                                "UPDATE sessions SET status = 'abandoned', end_time = ?1 WHERE id = ?2",
+                                rusqlite::params![now, session_id],
+                            );
+                            use tauri::Emitter;
+                            let _ = app.emit("session-abandoned", ());
+                        }
+                        
                         drop(conn);
                         let _ = crate::services::workspace_service::exit_workspace(app);
                     }
@@ -37,6 +48,14 @@ pub fn run() {
             // Open (or create) the SQLite DB and run all migrations
             let path = db_path(app.handle());
             let conn = open(&path).expect("Failed to open SQLite database");
+            
+            // Deactivate any currently active sessions on app startup
+            let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+            let _ = conn.execute(
+                "UPDATE sessions SET status = 'abandoned', end_time = ?1 WHERE status = 'active'",
+                rusqlite::params![now],
+            );
+            
             app.manage(DbConnection(Mutex::new(conn)));
             Ok(())
         })
@@ -48,7 +67,7 @@ pub fn run() {
             commands::task_commands::update_task,
             commands::task_commands::delete_task,
             commands::task_commands::reorder_tasks,
-            // ── Session commands (pseudo + stubs) ──────────────────────
+            // ── Session commands (real Session Engine B1a) ────────────────
             commands::session_commands::create_session,
             commands::session_commands::start_session,
             commands::session_commands::pause_session,
@@ -62,6 +81,7 @@ pub fn run() {
             commands::session_commands::reorder_session_tasks,
             commands::session_commands::update_task_allocation,
             commands::session_commands::get_session_tasks,
+            commands::session_commands::generate_session_blueprint,
             // ── Resource commands ──────────────────────────────────────
             commands::resource_commands::scan_resources,
             commands::resource_commands::register_resource,

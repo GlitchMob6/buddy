@@ -8,6 +8,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
   AiConfig,
   ActivityLog,
+  BlueprintResponse,
   CreateSessionPayload,
   CreateTaskPayload,
   RegisterResourcePayload,
@@ -92,6 +93,12 @@ export const updateTaskAllocation = (
 
 export const getSessionTasks = (sessionId: string): Promise<SessionTask[]> =>
   invoke('get_session_tasks', { sessionId });
+
+export const generateSessionBlueprint = (
+  taskIds: string[],
+  totalMinutes: number,
+): Promise<BlueprintResponse> =>
+  invoke('generate_session_blueprint', { taskIds, totalMinutes });
 
 // ── Resources ──────────────────────────────────────────────────────────────────
 

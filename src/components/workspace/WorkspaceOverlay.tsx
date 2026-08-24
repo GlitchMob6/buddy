@@ -4,7 +4,11 @@ import TopBar from './TopBar';
 import AppLauncherGrid from './AppLauncherGrid';
 import ChatbotPanel from './ChatbotPanel';
 
-export default function WorkspaceOverlay() {
+interface Props {
+  onExit?: () => void;
+}
+
+export default function WorkspaceOverlay({ onExit }: Props = {}) {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [activeTab, setActiveTab] = useState(0);
 
@@ -14,6 +18,7 @@ export default function WorkspaceOverlay() {
         onToggleChat={() => setIsChatOpen(!isChatOpen)} 
         activeTab={activeTab}
         setActiveTab={setActiveTab}
+        onExit={onExit}
       />
       <AppLauncherGrid />
       {isChatOpen && <ChatbotPanel onClose={() => setIsChatOpen(false)} />}

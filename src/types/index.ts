@@ -242,8 +242,29 @@ export interface UpdateTaskPayload {
   session_queued?: boolean;
 }
 
+export type PlanBlockKind = 'task' | 'break';
+
+export interface SessionPlanBlock {
+  kind: PlanBlockKind;
+  task_id: string | null;
+  task_title: string | null;
+  duration_minutes: number;
+  order: number;
+}
+
+export interface BlueprintResponse {
+  blocks: SessionPlanBlock[];
+  total_work_minutes: number;
+  total_break_minutes: number;
+  deferred_task_ids: string[];
+  warnings: string[];
+}
+
 export interface CreateSessionPayload {
   name?: string;
+  task_ids?: string[];
+  allocated_minutes?: number[];
+  total_minutes?: number;
 }
 
 export interface RegisterResourcePayload {

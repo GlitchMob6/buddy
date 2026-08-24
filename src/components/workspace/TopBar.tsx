@@ -1,14 +1,17 @@
 import { useState, useEffect } from 'react';
 import { Disc, MessageSquare, LogOut } from 'lucide-react';
 import { exitWorkspace } from '../../lib/ipc';
+import { useSession } from '../../hooks/useSession';
 
 interface TopBarProps {
   onToggleChat: () => void;
   activeTab: number;
   setActiveTab: (index: number) => void;
+  onExit?: () => void;
 }
 
-export default function TopBar({ onToggleChat, activeTab, setActiveTab }: TopBarProps) {
+export default function TopBar({ onToggleChat, activeTab, setActiveTab, onExit }: TopBarProps) {
+  const { activeSession, abandon } = useSession();
   const [time, setTime] = useState(new Date());
   const [workspaces, setWorkspaces] = useState([
     'Workspace 1', 'Workspace 2', 'Workspace 3', 'Workspace 4'
@@ -26,6 +29,14 @@ export default function TopBar({ onToggleChat, activeTab, setActiveTab }: TopBar
 
   const handleToggleMusic = () => {
     setIsPlaying(!isPlaying);
+  };
+
+  const handleExit = async () => {
+    if (activeSession) {
+      await abandon(activeSession.id);
+    }
+    await exitWorkspace();
+    if (onExit) onExit();
   };
 
   return (
@@ -50,7 +61,7 @@ export default function TopBar({ onToggleChat, activeTab, setActiveTab }: TopBar
       </div>
 
       <div className="top-bar-right">
-        <button className="icon-btn exit-btn" onClick={() => exitWorkspace()} title="Exit Workspace" style={{ marginRight: '8px' }}>
+        <button className="icon-btn exit-btn" onClick={handleExit} title="Exit Workspace" style={{ marginRight: '8px' }}>
           <LogOut size={20} />
         </button>
         <button className="icon-btn" onClick={onToggleChat} title="Toggle Chatbot">

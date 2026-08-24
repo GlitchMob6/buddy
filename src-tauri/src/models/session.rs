@@ -56,12 +56,20 @@ pub struct SessionRevision {
 }
 
 /// Payload for creating a session.
-/// Phase 0 pseudo: only name is used.
-/// Phase B1 (real): also accepts task_ids, allocated_minutes, total_minutes.
+/// Supports both the old pseudo mode (just name) and the real session engine
+/// (name + task_ids + allocated_minutes + total_minutes).
 #[derive(Debug, Deserialize)]
 pub struct CreateSessionPayload {
     pub name: Option<String>,
-    // Dev B will add scheduling fields here in Module B1
+    /// Task IDs to include in this session (in order).
+    #[serde(default)]
+    pub task_ids: Vec<String>,
+    /// Allocated minutes per task (parallel to task_ids).
+    #[serde(default)]
+    pub allocated_minutes: Vec<i32>,
+    /// Total session duration in minutes (including breaks).
+    #[serde(default)]
+    pub total_minutes: i32,
 }
 
 /// A task entry within a session blueprint.
@@ -71,4 +79,40 @@ pub struct SessionTask {
     pub task_id: String,
     pub task_order: i32,
     pub allocated_minutes: i32,
+}
+
+/// A single block in a generated session plan (task block or break).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanBlockKind {
+    Task,
+    Break,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionPlanBlock {
+    pub kind: PlanBlockKind,
+    /// Task ID if kind == Task, None for breaks.
+    pub task_id: Option<String>,
+    /// Task title (for display convenience). None for breaks.
+    pub task_title: Option<String>,
+    /// Duration in minutes for this block.
+    pub duration_minutes: i32,
+    /// 0-indexed order in the plan.
+    pub order: i32,
+}
+
+/// Response from the blueprint generation endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlueprintResponse {
+    /// The ordered plan blocks (tasks + breaks).
+    pub blocks: Vec<SessionPlanBlock>,
+    /// Total work minutes (excluding breaks).
+    pub total_work_minutes: i32,
+    /// Total break minutes.
+    pub total_break_minutes: i32,
+    /// Task IDs that were deferred (didn't fit).
+    pub deferred_task_ids: Vec<String>,
+    /// Warnings / recommendations for the user.
+    pub warnings: Vec<String>,
 }
